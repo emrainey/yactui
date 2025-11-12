@@ -1,0 +1,9 @@
+{
+    "python-envs.pythonProjects": [
+        {}
+    ],
+    "python.terminal.activateEnvironment": true,
+    "python-env.workspaceSearchPaths": [
+        "${workspaceFolder}/.venv",
+    ]
+}
