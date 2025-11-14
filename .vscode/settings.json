@@ -5,5 +5,8 @@
     "python.terminal.activateEnvironment": true,
     "python-env.workspaceSearchPaths": [
         "${workspaceFolder}/.venv",
+    ],
+    "cSpell.words": [
+        "cyphal"
     ]
 }

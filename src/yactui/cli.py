@@ -1,4 +1,5 @@
 import os
+import pathlib
 import sys
 import logging
 import asyncio
@@ -7,10 +8,8 @@ import argparse
 from typing import List, Optional
 from rich_argparse import RichHelpFormatter
 
-# from yactui import node
 from .ui import CyphalTUI
-
-# from .node import CyphalNode
+from .node import CyphalNode
 
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
@@ -49,13 +48,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         default="127.0.0.1",
         help="The IP address to bind to for Cyphal communication default=%(default)s",
     )
+    parser.add_argument(
+        "--mtu",
+        type=int,
+        default=(1500 - 20 - 8 - 24),  # default MTU for Cyphal/UDP
+        help="The MTU to use for Cyphal communication default=%(default)s",
+    )
     # the path to the cyphal generated types
     parser.add_argument(
         "--cyphal-path",
         action="store",
-        type=str,
-        default=f"{os.getenv('HOME')}/cyphal/generated_types",
+        type=pathlib.Path,
+        default=f"{os.getenv('HOME')}/cyphal/dsdl",
         help="The path to the Cyphal generated types default=%(default)s",
+    )
+    parser.add_argument(
+        "--gen-path",
+        action="store",
+        type=pathlib.Path,
+        default=f"{os.getenv('HOME')}/cyphal/generated",
+        help="Disable colored output in the TUI",
     )
 
     args = parser.parse_args(argv)
@@ -67,23 +79,37 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.verbose > 2:
         logger.setLevel(logging.DEBUG)
 
-    assert os.path.exists(
-        args.cyphal_path
-    ), f"The specified Cyphal path does not exist: {args.cyphal_path}"
+    cyphal_path = pathlib.Path(args.cyphal_path).resolve()
+    generated_path = pathlib.Path(args.gen_path).resolve()
 
-    # os.environ["UAVCAN__NODE__ID"] = str(args.node_id)
-    # os.environ["UAVCAN__UDP__IFACE"] = str(args.ip)
-    os.environ["PYTHONPATH"] = str(args.cyphal_path)
-    # os.environ["CYPHAL_PATH"] = str(args.cyphal_path)
-    os.environ["YAKUT_PATH"] = str(args.cyphal_path)
-    #
-    # node = CyphalNode(node_id=args.node_id, interface=args.interface, ip=args.ip)
-    app = CyphalTUI()
-    try:
-        asyncio.run(app.run_async())
-        # asyncio.gather(node.run(), app.run_async())
-    except KeyboardInterrupt:
-        pass
-    # finally:
-    # node.close()
+    assert os.path.exists(
+        cyphal_path
+    ), f"The specified Cyphal path does not exist: {cyphal_path}"
+    assert os.path.exists(
+        generated_path
+    ), f"The specified generated path does not exist: {generated_path}"
+
+    os.environ["UAVCAN__LOGGING__LEVEL"] = str(logger.level)
+    os.environ["UAVCAN__NODE__ID"] = str(args.node_id)
+    os.environ["UAVCAN__UDP__IFACE"] = str(args.ip)
+    os.environ["UAVCAN__UDP__MTU"] = str(args.mtu)
+    os.environ["CYPHAL_PATH"] = str(cyphal_path)
+    os.environ["CYPHAL_ALLOW_UNREGULATED_FIXED_PORT_ID"] = "true"
+    sys.path.append(str(generated_path))
+
+    async def run_apps():
+        node = CyphalNode(
+            node_id=args.node_id,
+            ip=args.ip,
+        )
+        app = CyphalTUI(nodes=[node])
+        try:
+            # asyncio.run(app.run_async())
+            await asyncio.gather(node.start(), app.run_async())
+        except KeyboardInterrupt:
+            pass
+        finally:
+            node.close()
+
+    asyncio.run(run_apps())
     return 0
