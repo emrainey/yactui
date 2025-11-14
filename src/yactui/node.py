@@ -96,6 +96,10 @@ class CyphalNode:
     async def start(self):
         await asyncio.create_task(self.run())
 
+    def mask_to_list(self, mask: List[bool]) -> List[int]:
+        """Convert a boolean mask to a list of indices where the mask is True"""
+        return [i for i, bit in enumerate(mask) if bit]
+
     async def run(self):
         def on_heartbeat(
             msg: uavcan.node.Heartbeat_1_0, txfr: pycyphal.transport.TransferFrom
@@ -107,6 +111,13 @@ class CyphalNode:
                     msg.mode.value,
                     msg.uptime,
                     msg.vendor_specific_status_code,
+                )
+            else:
+                self.known_nodes[txfr.source_node_id].health = Health(msg.health.value)
+                self.known_nodes[txfr.source_node_id].mode = Mode(msg.mode.value)
+                self.known_nodes[txfr.source_node_id].uptime = msg.uptime
+                self.known_nodes[txfr.source_node_id].vendor_specific_status_code = (
+                    msg.vendor_specific_status_code
                 )
             self.receive_event.set()
 
@@ -124,6 +135,18 @@ class CyphalNode:
                 )  # msg.subscribers.ids
                 self.known_nodes[txfr.source_node_id].clients = []  # msg.clients.ids
                 self.known_nodes[txfr.source_node_id].servers = []  # msg.servers.ids
+            # self.known_nodes[txfr.source_node_id].publishers = self.mask_to_list(
+            #     msg.publishers.mask
+            # )
+            # self.known_nodes[txfr.source_node_id].subscribers = self.mask_to_list(
+            #     msg.subscribers.mask
+            # )
+            self.known_nodes[txfr.source_node_id].clients = self.mask_to_list(
+                msg.clients.mask
+            )
+            self.known_nodes[txfr.source_node_id].servers = self.mask_to_list(
+                msg.servers.mask
+            )
             self.receive_event.set()
 
         self.subscribers["portlist"].receive_in_background(on_portlist)
