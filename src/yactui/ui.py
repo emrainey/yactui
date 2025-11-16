@@ -3,7 +3,7 @@ from logging import info
 import textual
 import asyncio
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from textual.app import App, ComposeResult
 from textual.widgets import (
     Header,
@@ -12,6 +12,7 @@ from textual.widgets import (
     Tree,
     RichLog,
     Input,
+    # UnknownNodeID,
 )
 from textual.containers import Vertical, Horizontal
 
@@ -42,6 +43,7 @@ class CyphalTUI(App):
     serial_nodes: Any
     nodes: Dict[int, Node]
     node_id: int
+    selected_node: Optional[int]  # Uses the Node ID of the selected node in the tree
 
     CSS_PATH = "yactui.tcss"
     BINDINGS = [("q", "quit", "Quit the application")]
@@ -50,6 +52,7 @@ class CyphalTUI(App):
         super().__init__(**kwargs)
         self.cyphal_nodes = nodes
         self.node_id = 0
+        self.selected_node = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -78,29 +81,28 @@ class CyphalTUI(App):
 
         info_viewer = self.query_one("#info-viewer", Static)
         # Set initial content for info and log viewers
-        info_viewer.update("\n\tSelect a node to see details here.")
+        info_viewer.update("<== Select a node to see details here.")
         log_viewer = self.query_one("#log-viewer", RichLog)
         log_viewer.clear()
-        # log_viewer.write("Subscribed to uavcan.diagnostic.Record...")
-        # log_viewer.write("Listening for Cyphal network traffic...")
+        log_viewer.write("Subscribed to uavcan.diagnostic.Record...")
         asyncio.create_task(self.main())
 
     def heartbeat_to_string(self, node: Node) -> str:
         return f"{node.node_id}: Health: {node.health}, Mode: {node.mode}, Uptime: {node.uptime} VSSC: {hex(node.vendor_specific_status_code)}"
 
     def node_to_string(self, node: Node) -> str:
-        return f"""
-    Node ID: {node.node_id}
-    Name: {node.name}
-    Software Version: {node.software_version[0]}.{node.software_version[1]}
-    Hardware Version: {node.hardware_version[0]}.{node.hardware_version[1]}
-    Revision: {hex(node.revision)}
-    CRC64WE: {hex(node.crc64we)}
-    UUID: {node.unique_id.hex()}
-    Publishers: {node.publishers}
-    Subscribers: {node.subscribers}
-    Clients: {node.clients}
-    Servers: {node.servers}
+        return f"""Node ID: {node.node_id}
+Name: {node.name}
+Software Version: {node.software_version[0]}.{node.software_version[1]}
+Hardware Version: {node.hardware_version[0]}.{node.hardware_version[1]}
+Revision: {hex(node.revision)}
+CRC64WE: {hex(node.crc64we) if len(node.crc64we) > 0 else 'N/A'}
+UUID: {node.unique_id.hex()}
+Publishers: {node.publishers}
+Subscribers: {node.subscribers}
+Clients: {node.clients}
+Servers: {node.servers}
+TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
 """
 
     def refresh_display(self) -> None:
@@ -113,11 +115,11 @@ class CyphalTUI(App):
             for node_id, node in cyphal_node.known_nodes.items():
                 item = self.heartbeat_to_string(node)
                 subnet = None
-                if cyphal_node.transport == "UDP":
+                if cyphal_node.transport_type == "UDP":
                     subnet = self.udp_nodes
-                elif cyphal_node.transport == "CAN":
+                elif cyphal_node.transport_type == "CAN":
                     subnet = self.can_nodes
-                elif cyphal_node.transport == "Serial":
+                elif cyphal_node.transport_type == "Serial":
                     subnet = self.serial_nodes
                 else:
                     continue
@@ -130,36 +132,56 @@ class CyphalTUI(App):
                     subnet.add_leaf(item)
         self.node_tree.refresh()
 
+        if self.selected_node is not None:
+            # Update info viewer for selected Tree node
+            info_viewer = self.query_one("#info-viewer", Static)
+            # convert the label to a Cyphal node ID (different)
+            try:
+                node = self.node_tree.get_node_by_id(self.selected_node)
+                label = str(node.label)
+                self.node_id = self.get_node_id_from_label(label) or 0
+            except Exception as e:
+                label = ""
+                self.node_id = 0
+            if self.node_id > 0:
+                for cyphal_node in self.cyphal_nodes:
+                    if self.node_id in cyphal_node.known_nodes.keys():
+                        info_viewer.update(
+                            self.node_to_string(cyphal_node.known_nodes[self.node_id])
+                        )
+                        break
+
         log_viewer = self.query_one("#log-viewer", RichLog)
-        log_viewer.clear()
+        # do not clear the log! just append new entries
         for cyphal_node in self.cyphal_nodes:
-            if cyphal_node.diagnostics:
-                for node_id, logs in cyphal_node.diagnostics.items():
-                    if self.node_id and node_id:
-                        for log in logs:
-                            log_viewer.write(
-                                f"[{log.timestamp_microseconds}] {log.level}: {log.message}"
-                            )
+            for log in cyphal_node.diagnostics:
+                log_viewer.write(
+                    f"[{log.node_id}][{log.timestamp}] {log.level}: {log.message}"
+                )
 
-    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        """Handle node selection in the tree to display node details."""
-        # log_viewer = self.query_one("#log-viewer", RichLog)
-        info_viewer = self.query_one("#info-viewer", Static)
-
-        label = str(event.node.label)
-        # log_viewer.write(f"Selected node: {label}")
+    def get_node_id_from_label(self, label: str) -> Optional[int]:
+        """Extract the Node ID from a tree node label."""
         if ":" in label:
             node_id_str = label.split(":")[0]
             try:
-                self.node_id = int(node_id_str)
+                return int(node_id_str)
             except ValueError:
-                return
-            for node in self.cyphal_nodes:
-                if self.node_id in node.known_nodes.keys():
-                    info_viewer.update(
-                        self.node_to_string(node.known_nodes[self.node_id])
-                    )
-                    break
+                return None
+        return None
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        """Handle node selection in the tree to display node details."""
+        log_viewer = self.query_one("#log-viewer", RichLog)
+        info_viewer = self.query_one("#info-viewer", Static)
+
+        label = str(event.node.label)
+        self.selected_node = event.node.id
+        log_viewer.write(f"Selected node: {label}:{self.selected_node}")
+        self.node_id = self.get_node_id_from_label(label) or 0
+        for node in self.cyphal_nodes:
+            if self.node_id in node.known_nodes.keys():
+                info_viewer.update(self.node_to_string(node.known_nodes[self.node_id]))
+                break
 
     def action_quit(self) -> None:
         """Action to quit the application."""
@@ -172,12 +194,14 @@ class CyphalTUI(App):
         UPDATE_PERIOD = 0.5  # seconds
         next_update_at = asyncio.get_running_loop().time()
         while True:
-            # TODO wait for something to happen on all nodes, gather?
-            await self.cyphal_nodes[0].receive_event.wait()
-            # clear the event (seems like this should be done automatically? this will be a race condition otherwise)
-            self.cyphal_nodes[0].receive_event.clear()
             # display update
             self.refresh_display()
             # let some time pass
             next_update_at += UPDATE_PERIOD
-            await asyncio.sleep(next_update_at - asyncio.get_running_loop().time())
+            await asyncio.gather(
+                *[node.receive_event.wait() for node in self.cyphal_nodes],
+                asyncio.sleep(next_update_at - asyncio.get_running_loop().time()),
+            )
+            for node in self.cyphal_nodes:
+                if node.receive_event.is_set():
+                    node.receive_event.clear()

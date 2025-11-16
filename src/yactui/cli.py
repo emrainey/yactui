@@ -9,7 +9,7 @@ from typing import List, Optional
 from rich_argparse import RichHelpFormatter
 
 from .ui import CyphalTUI
-from .node import CyphalNode
+from .node import CyphalNode, MTU_GUESS
 
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--mtu",
         type=int,
-        default=(1500 - 20 - 8 - 24),  # default MTU for Cyphal/UDP
+        default=MTU_GUESS,
         help="The MTU to use for Cyphal communication default=%(default)s",
     )
     # the path to the cyphal generated types
@@ -90,9 +90,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ), f"The specified generated path does not exist: {generated_path}"
 
     os.environ["UAVCAN__LOGGING__LEVEL"] = str(logger.level)
-    os.environ["UAVCAN__NODE__ID"] = str(args.node_id)
-    os.environ["UAVCAN__UDP__IFACE"] = str(args.ip)
-    os.environ["UAVCAN__UDP__MTU"] = str(args.mtu)
+    # os.environ["UAVCAN__NODE__ID"] = str(args.node_id)
+    # os.environ["UAVCAN__UDP__IFACE"] = str(args.ip)
+    # os.environ["UAVCAN__UDP__MTU"] = str(args.mtu)
     os.environ["CYPHAL_PATH"] = str(cyphal_path)
     os.environ["CYPHAL_ALLOW_UNREGULATED_FIXED_PORT_ID"] = "true"
     sys.path.append(str(generated_path))

@@ -32,3 +32,6 @@ where = ["src"]
 
 [tool.setuptools.package-dir]
 "" = "src"
+
+[tool.black]
+line-length = 120

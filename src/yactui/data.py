@@ -1,8 +1,12 @@
 import enum
 from dataclasses import dataclass
-from typing import Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any
+
+# We re-define these here to avoid a dependency on pycyphal in data.py
+# although this is somewhat redundant with node.py and the pycyphal definitions.
 
 
+@enum.unique
 class Health(enum.IntEnum):
     """Health status for heartbeat publisher"""
 
@@ -12,6 +16,7 @@ class Health(enum.IntEnum):
     WARNING = 3
 
 
+@enum.unique
 class Mode(enum.IntEnum):
     """Mode status for heartbeat publisher"""
 
@@ -21,6 +26,7 @@ class Mode(enum.IntEnum):
     SOFTWARE_UPDATE = 3
 
 
+@enum.unique
 class Severity(enum.IntEnum):
     """Severity levels for diagnostic records"""
 
@@ -37,7 +43,7 @@ class Severity(enum.IntEnum):
 @dataclass
 class Node:
     node_id: int
-    name: str
+    name: Optional[str]
     health: Health
     mode: Mode
     uptime: int  # seconds
@@ -45,13 +51,16 @@ class Node:
     software_version: Tuple[int, int]
     hardware_version: Tuple[int, int]
     revision: int  # 64 bit number, hexadecimal
-    crc64we: int  # 64 bit number, hexadecimal
+    crc64we: List[int]  # 64 bit number, hexadecimal
     unique_id: bytes  # 16 bytes
     certificate: bytes  # variable length
     publishers: List[int]  # List of Subject IDs
     subscribers: List[int]  # List of Subject IDs
     clients: List[int]  # List of Service IDs
     servers: List[int]  # List of Service IDs
+    number_emitted: int = 0
+    number_received: int = 0
+    number_error: int = 0
 
 
 def make_cyphal_node(
@@ -63,7 +72,7 @@ def make_cyphal_node(
 ) -> Node:
     return Node(
         node_id=id,
-        name="",
+        name=None,
         health=health,
         mode=mode,
         uptime=uptime,

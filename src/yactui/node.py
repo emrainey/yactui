@@ -6,43 +6,79 @@ import pycyphal  # Importing PyCyphal will automatically install the import hook
 
 import pycyphal.application  # This module requires the root namespace "uavcan" to be transcompiled.
 import pycyphal.transport.udp
+import pycyphal.transport.can
+import pycyphal.transport.serial
 
 # Import DSDLs after pycyphal import hook is installed.
 import uavcan.node  # noqa
 import uavcan.diagnostic  # noqa
 import uavcan.time  # noqa
 
-from typing import Any, Dict, List
-from pycyphal.application.heartbeat_publisher import Health
+from typing import Any, Dict, List, Optional
 from pycyphal.application import make_node, NodeInfo, register
 
 # Dataclasses for Cyphal Node
 from .data import Node, Mode, Health, Severity, make_cyphal_node, Log, make_log
 
 UPDATE_PERIOD = 1.0  # seconds
+MTU_GUESS = 1500 - 20 - 8 - 24  # Default MTU for Cyphal/UDP
 
 
 class CyphalNode:
     """Holds the Cyphal Node and pub/subs"""
 
-    diagnostics: Dict[int, collections.deque[Log]]
+    diagnostics: collections.deque[Log]
     current_time: float = 0.0
     previous_time: float = 0.0
+    captured_time: float = 0.0
     receive_event: asyncio.Event
     running: bool
     known_nodes: Dict[int, Node]
-    query_nodes: List[int]
+    query_nodes: collections.deque[int]
+    node_info: uavcan.node.GetInfo_1_0.Response
+    subscribers: Dict[str, Any]
+    publishers: Dict[str, Any]
+    clients: Dict[str, Any]
+    servers: Dict[str, Any]
 
-    def __init__(self, node_id: int, ip: str = "127.0.0.1"):
+    def __init__(
+        self,
+        node_id: int,
+        ip: Optional[str] = "127.0.0.1",
+        mtu: int = MTU_GUESS,
+        inf: Optional[str] = "can0",
+    ) -> None:
         """Constructor"""
-        self.transport = "UDP"
-        self.diagnostics = {}
+        if ip is not None:
+            self.transport_type = "UDP"
+            self.transport = pycyphal.transport.udp.UDPTransport(
+                local_ip_address=ip,
+                local_node_id=node_id,
+                mtu=mtu,
+            )
+        elif "can" in inf:
+            # UNTESTED!
+            self.transport_type = "CAN"
+            self.transport = pycyphal.transport.can.CANTransport(
+                interface_name=inf,
+                local_node_id=node_id,
+                mtu=mtu,
+            )
+        else:
+            # UNTESTED!
+            self.transport_type = "Serial"
+            self.transport = pycyphal.transport.serial.SerialTransport(
+                port_name=inf,
+                local_node_id=node_id,
+                mtu=mtu,
+            )
+        self.diagnostics = collections.deque(maxlen=100)
         self.query_nodes = []
         self.known_nodes = {}
         self.node_info = NodeInfo(
             name="org.opencyphal.yactui", software_version=uavcan.node.Version_1_0(0, 1)
         )
-        self.node = make_node(info=self.node_info)  # , transport=self.transport)
+        self.node = make_node(info=self.node_info, transport=self.transport)
         self.node.heartbeat_publisher.mode = uavcan.node.Mode_1.INITIALIZATION
         self.node.heartbeat_publisher.health = Health.ADVISORY
         self.subscribers = {
@@ -82,16 +118,37 @@ class CyphalNode:
         self.previous_time = self.current_time
         return msg
 
-    def log(self, level: Severity = Severity.INFO, message: str = "") -> None:
-        """Log a message to the Cyphal network"""
-        log_msg = uavcan.diagnostic.Record_1_1(
+    def diagnostic(
+        self, level: Severity, message: str = ""
+    ) -> uavcan.diagnostic.Record_1_1:
+        """Log a message to the Cyphal transport which we use"""
+        return uavcan.diagnostic.Record_1_1(
             timestamp=uavcan.time.SynchronizedTimestamp_1_0(
-                int(time.time() * 1_000_000)
+                microsecond=int(time.time() * 1_000_000)
             ),
             severity=uavcan.diagnostic.Severity_1_0(int(level)),
             text=message,
         )
-        self.publishers["diagnostic"].publish(log_msg)
+
+    async def info(self, message: str):
+        """Log an info message to the Cyphal network"""
+        msg = self.diagnostic(Severity.INFO, message)
+        await self.publishers["diagnostic"].publish(msg)
+
+    async def debug(self, message: str):
+        """Log a debug message to the Cyphal network"""
+        msg = self.diagnostic(Severity.DEBUG, message)
+        await self.publishers["diagnostic"].publish(msg)
+
+    async def warning(self, message: str):
+        """Log a warning message to the Cyphal network"""
+        msg = self.diagnostic(Severity.WARNING, message)
+        await self.publishers["diagnostic"].publish(msg)
+
+    async def error(self, message: str):
+        """Log an error message to the Cyphal network"""
+        msg = self.diagnostic(Severity.ERROR, message)
+        await self.publishers["diagnostic"].publish(msg)
 
     async def start(self):
         await asyncio.create_task(self.run())
@@ -101,6 +158,11 @@ class CyphalNode:
         return [i for i, bit in enumerate(mask) if bit]
 
     async def run(self):
+
+        ###############################
+        # Setup Subscription Callbacks
+        ###############################
+
         def on_heartbeat(
             msg: uavcan.node.Heartbeat_1_0, txfr: pycyphal.transport.TransferFrom
         ) -> None:
@@ -119,6 +181,9 @@ class CyphalNode:
                 self.known_nodes[txfr.source_node_id].vendor_specific_status_code = (
                     msg.vendor_specific_status_code
                 )
+            # once we find it, add it to the query list
+            self.query_nodes.append(txfr.source_node_id)
+            # new data!
             self.receive_event.set()
 
         self.subscribers["heartbeat"].receive_in_background(on_heartbeat)
@@ -127,26 +192,19 @@ class CyphalNode:
             msg: uavcan.node.port.List_1_0, txfr: pycyphal.transport.TransferFrom
         ) -> None:
             if txfr.source_node_id in self.known_nodes.keys():
-                self.known_nodes[txfr.source_node_id].publishers = (
-                    []
-                )  # msg.publishers.mask
-                self.known_nodes[txfr.source_node_id].subscribers = (
-                    []
-                )  # msg.subscribers.ids
-                self.known_nodes[txfr.source_node_id].clients = []  # msg.clients.ids
-                self.known_nodes[txfr.source_node_id].servers = []  # msg.servers.ids
-            # self.known_nodes[txfr.source_node_id].publishers = self.mask_to_list(
-            #     msg.publishers.mask
-            # )
-            # self.known_nodes[txfr.source_node_id].subscribers = self.mask_to_list(
-            #     msg.subscribers.mask
-            # )
-            self.known_nodes[txfr.source_node_id].clients = self.mask_to_list(
-                msg.clients.mask
-            )
-            self.known_nodes[txfr.source_node_id].servers = self.mask_to_list(
-                msg.servers.mask
-            )
+                # self.known_nodes[txfr.source_node_id].publishers = self.mask_to_list(
+                #     msg.publishers.mask
+                # )
+                # self.known_nodes[txfr.source_node_id].subscribers = self.mask_to_list(
+                #     msg.subscribers.mask
+                # )
+                self.known_nodes[txfr.source_node_id].clients = self.mask_to_list(
+                    msg.clients.mask
+                )
+                self.known_nodes[txfr.source_node_id].servers = self.mask_to_list(
+                    msg.servers.mask
+                )
+            # new data!
             self.receive_event.set()
 
         self.subscribers["portlist"].receive_in_background(on_portlist)
@@ -154,13 +212,11 @@ class CyphalNode:
         def on_diagnostic(
             msg: uavcan.diagnostic.Record_1_1, txfr: pycyphal.transport.TransferFrom
         ) -> None:
-            if txfr.source_node_id not in self.diagnostics:
-                self.diagnostics[txfr.source_node_id] = collections.deque(maxlen=100)
-            self.diagnostics[txfr.source_node_id].append(
+            self.diagnostics.append(
                 make_log(
-                    timestamp_microseconds=msg.timestamp.value,
+                    timestamp_microseconds=msg.timestamp.microsecond,
                     level=Severity(msg.severity.value),
-                    message=msg.message,
+                    message=msg.text.tobytes().decode("utf-8", errors="ignore"),
                     node_id=txfr.source_node_id,
                 )
             )
@@ -168,34 +224,93 @@ class CyphalNode:
 
         self.subscribers["diagnostic"].receive_in_background(on_diagnostic)
 
+        def on_time(
+            msg: uavcan.time.Synchronization_1_0,
+            txfr: pycyphal.transport.TransferFrom,
+        ) -> None:
+            # Just update the captured time
+            self.captured_time = (
+                float(msg.previous_transmission_timestamp_microsecond) / 1_000_000
+            )
+            self.receive_event.set()
+
+        self.subscribers["time"].receive_in_background(on_time)
+
+        ###############################
+        # Run the main node loop!
+        ###############################
+
         next_update_at = asyncio.get_running_loop().time() + UPDATE_PERIOD
+
         while self.running:
-            # do stuff
-            self.publishers["time"].publish(self.get_time_message())
+            await self.publishers["time"].publish(self.get_time_message())
             for server_node_id in self.query_nodes:
-                if server_node_id in self.known_nodes:
+                if self.known_nodes[server_node_id].name is not None:
                     continue  # Already have info
+                client = self.node.make_client(
+                    uavcan.node.GetInfo_1_0, server_node_id=server_node_id
+                )
                 try:
-                    response = await self.clients["get_node_info"].request(
-                        uavcan.node.GetInfo_1_0.Request(),
-                        server_node_id=server_node_id,
-                        timeout=1.0,
+                    response = await client.call(uavcan.node.GetInfo_1_0.Request())
+                    if response is None:
+                        # timeout, try again later
+                        self.query_nodes.append(server_node_id)
+                        continue
+                    # split the tuple up
+                    msg, metadata = response
+                    assert isinstance(msg, uavcan.node.GetInfo_1_0.Response)
+                    print(
+                        "Got info for Node ID",
+                        metadata.source_node_id,
+                        " Response:",
+                        response,
                     )
-                    self.known_nodes[server_node_id]["getinfo"] = response
-                except pycyphal.transport.OperationTimedOutError:
-                    logging.debug(f"Node {server_node_id} did not respond to GetInfo")
+                    self.known_nodes[server_node_id].name = msg.name.tobytes().decode(
+                        "utf-8", errors="ignore"
+                    )
+                    self.known_nodes[server_node_id].software_version = (
+                        msg.software_version.major,
+                        msg.software_version.minor,
+                    )
+                    self.known_nodes[server_node_id].hardware_version = (
+                        msg.hardware_version.major,
+                        msg.hardware_version.minor,
+                    )
+                    self.known_nodes[server_node_id].revision = (
+                        msg.software_vcs_revision_id
+                    )
+                    self.known_nodes[server_node_id].crc64we = (
+                        msg.software_image_crc.flatten()
+                    )
+                    self.known_nodes[server_node_id].unique_id = msg.unique_id.tobytes()
+                    self.known_nodes[server_node_id].certificate = (
+                        msg.certificate_of_authenticity.tobytes()
+                    )
+                finally:
+                    client.close()
+            # For each known Node ID, get transport statistics every period
+            for node_id in self.known_nodes.keys():
+                client = self.node.make_client(
+                    uavcan.node.GetTransportStatistics_0_1, server_node_id=node_id
+                )
                 try:
-                    response = await self.clients["transport_statistics"].request(
-                        uavcan.node.GetTransportStatistics_0_1.Request(),
-                        server_node_id=server_node_id,
-                        timeout=1.0,
+                    response = await client.call(
+                        uavcan.node.GetTransportStatistics_0_1.Request()
                     )
-                    self.known_nodes[server_node_id]["transport_statistics"] = response
-                except pycyphal.transport.OperationTimedOutError:
-                    logging.debug(
-                        f"Node {server_node_id} did not respond to GetTransportStatistics"
+                    if response is None:
+                        # timeout
+                        continue
+                    self.known_nodes[node_id].number_emitted = (
+                        response.transfer_statistics.number_of_emitted_frames
                     )
-            self.log(Severity.INFO, "YACTUI is running")
+                    self.known_nodes[node_id].number_received = (
+                        response.transfer_statistics.number_of_received_frames
+                    )
+                    self.known_nodes[node_id].number_error = (
+                        response.transfer_statistics.number_of_error_frames
+                    )
+                finally:
+                    client.close()
             await asyncio.sleep(next_update_at - asyncio.get_running_loop().time())
             next_update_at += UPDATE_PERIOD
 
