@@ -1,10 +1,22 @@
 # Cyphal TUI
 
-A 'textual' based TUI for monitoring Cyphal networks.
+A `textual` based TUI for monitoring Cyphal networks.
+
+![View of yacui in the command line](docs/yactui.png)
 
 ## Usage
 
 ### Environment
+
+I setup a python virtual env with this:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install yakut==0.13.0 textual
+# Install yactui from here as editable
+pip install -e .
+```
 
 This is the contents of the .env I use. I've setup a `cyphal` folder in my home directory which has the [UAVCAN Data Types](https://github.com/OpenCyphal/public_regulated_data_types) in the `dsdl` folder and I've
 precompiled them to the `generated` folder.
@@ -21,7 +33,7 @@ No need to set `UAVCAN__NODE__ID` or `UAVCAN__UDP__IFACE`.
 
 ```bash
 # Using yakut <= 0.13.0
-yakut -v compile -O ${YAKUT_PATH} ${CYPHAL_PATH}/uavcan ${CYPHAL_PATH}/reg ${CYPHAL_PATH}/udral
+yakut -v compile -O ${YAKUT_PATH} ${CYPHAL_PATH}/uavcan ${CYPHAL_PATH}/reg
 ```
 
 ### Command Options
@@ -30,7 +42,7 @@ yakut -v compile -O ${YAKUT_PATH} ${CYPHAL_PATH}/uavcan ${CYPHAL_PATH}/reg ${CYP
 $ yactui --help
 Usage: yactui [-h] [-v] [--node-id NODE_ID] [--interface INTERFACE] [--ip IP] [--mtu MTU] [--cyphal-path CYPHAL_PATH] [--gen-path GEN_PATH]
 
-Cyphal TUI Application
+Yet Another Cyphal Textual User Interface (YACTUI)
 
 Options:
   -h, --help            show this help message and exit
@@ -41,7 +53,7 @@ Options:
   --ip IP               The IP address to bind to for Cyphal communication default=127.0.0.1
   --mtu MTU             The MTU to use for Cyphal communication default=1448
   --cyphal-path CYPHAL_PATH
-                        The path to the Cyphal generated types default=/$HOME/cyphal/dsdl
+                        The path to the Cyphal generated types default=$HOME/cyphal/dsdl
   --gen-path GEN_PATH   The generated path for the Cyphal generated types default=$HOME/cyphal/generated
 ```
 

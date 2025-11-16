@@ -19,7 +19,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     parser = argparse.ArgumentParser(
-        formatter_class=RichHelpFormatter, description="Cyphal TUI Application"
+        formatter_class=RichHelpFormatter,
+        description="Yet Another Cyphal Textual User Interface (YACTUI)",
     )
     parser.add_argument(
         "-v",
