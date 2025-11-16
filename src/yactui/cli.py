@@ -67,7 +67,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store",
         type=pathlib.Path,
         default=f"{os.getenv('HOME')}/cyphal/generated",
-        help="Disable colored output in the TUI",
+        help="The generated path for the Cyphal generated types default=%(default)s",
     )
 
     args = parser.parse_args(argv)
@@ -89,12 +89,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         generated_path
     ), f"The specified generated path does not exist: {generated_path}"
 
-    os.environ["UAVCAN__LOGGING__LEVEL"] = str(logger.level)
+    # os.environ["UAVCAN__LOGGING__LEVEL"] = str(logger.level)
     # os.environ["UAVCAN__NODE__ID"] = str(args.node_id)
     # os.environ["UAVCAN__UDP__IFACE"] = str(args.ip)
     # os.environ["UAVCAN__UDP__MTU"] = str(args.mtu)
-    os.environ["CYPHAL_PATH"] = str(cyphal_path)
-    os.environ["CYPHAL_ALLOW_UNREGULATED_FIXED_PORT_ID"] = "true"
+    # os.environ["CYPHAL_PATH"] = str(cyphal_path)
+    # os.environ["CYPHAL_ALLOW_UNREGULATED_FIXED_PORT_ID"] = "true"
     sys.path.append(str(generated_path))
 
     async def run_apps():

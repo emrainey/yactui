@@ -14,11 +14,23 @@ import uavcan.node  # noqa
 import uavcan.diagnostic  # noqa
 import uavcan.time  # noqa
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from pycyphal.application import make_node, NodeInfo, register
 
 # Dataclasses for Cyphal Node
-from .data import Node, Mode, Health, Severity, make_cyphal_node, Log, make_log
+from .data import (
+    Node,
+    Mode,
+    Health,
+    Severity,
+    Command,
+    Status,
+    Result,
+    make_cyphal_node,
+    Log,
+    make_log,
+    make_result,
+)
 
 UPDATE_PERIOD = 1.0  # seconds
 MTU_GUESS = 1500 - 20 - 8 - 24  # Default MTU for Cyphal/UDP
@@ -40,6 +52,7 @@ class CyphalNode:
     publishers: Dict[str, Any]
     clients: Dict[str, Any]
     servers: Dict[str, Any]
+    results: collections.deque[Result]
 
     def __init__(
         self,
@@ -73,6 +86,7 @@ class CyphalNode:
                 mtu=mtu,
             )
         self.diagnostics = collections.deque(maxlen=100)
+        self.results = collections.deque(maxlen=100)
         self.query_nodes = []
         self.known_nodes = {}
         self.node_info = NodeInfo(
@@ -156,6 +170,58 @@ class CyphalNode:
     def mask_to_list(self, mask: List[bool]) -> List[int]:
         """Convert a boolean mask to a list of indices where the mask is True"""
         return [i for i, bit in enumerate(mask) if bit]
+
+    async def send_command(
+        self, server_node_id: int, command: Union[int, str], args: str
+    ) -> bool:
+        """Send a command to a node"""
+        client = self.node.make_client(
+            uavcan.node.ExecuteCommand_1_3, server_node_id=server_node_id
+        )
+        status: Status = Status.DID_NOT_SEND
+        response_message: str = ""
+        respondent: int = server_node_id
+        try:
+            # map the strings to command numbers from Cyphal
+            if isinstance(command, int):
+                # Convert string command to integer command
+                cmd_value = int(command)
+            else:  # if isinstance(command, str):
+                try:
+                    cmd_value = int(Command[command.upper()].value)
+                except KeyError:
+                    response_message = f"Unknown command: {command}"
+                    return False  # the finally will still log the DID_NOT_SEND status
+
+            request = uavcan.node.ExecuteCommand_1_3.Request(
+                command=cmd_value,
+                parameter=args.encode("utf-8"),
+            )
+            response = await client.call(request)
+            if response is None:
+                # timeout
+                status = Status.TIMEOUT
+                response_message = (
+                    f"Command {command} to Node ID {server_node_id} timed out."
+                )
+                return False  # the finally will still log the status
+            msg, metadata = response
+            assert isinstance(msg, uavcan.node.ExecuteCommand_1_3.Response)
+            respondent = metadata.source_node_id
+            status = Status(msg.status.value)
+            response_message = msg.response_message.tobytes().decode(
+                "utf-8", errors="ignore"
+            )
+        finally:
+            client.close()
+            self.results.append(
+                make_result(
+                    status=status,
+                    output=response_message,
+                    server_node_id=respondent,
+                )
+            )
+        return True
 
     async def run(self):
 

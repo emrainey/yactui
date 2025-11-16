@@ -24,34 +24,42 @@ Screen {
     background: $secondary;
 }
 #command-bar {
-    height: 3;
+    height: 4;
     width: 100%;
-    padding: 1;
+    padding: 0;
+    margin: 0;
+    background: $secondary;
+}
+#cmd-node-area {
+    width: 10%;
+}
+#cmd-number-area {
+    width: 20%;
+}
+#cmd-args-area {
+    width: 50%;
+}
+#cmd-send-area {
+    width: 30%;
+}
+#cmd-node {
+    height: 3; /* border needs at least 3 */
+    padding: 0;
     margin: 0;
     border: solid $accent;
     background: $secondary;
 }
-#cmd-node {
-    height: 1;
-    width: 10%;
-    padding: 1;
-    margin: 1;
-    border: solid $accent;
-    background: $secondary;
-}
 #cmd{
-    height: 1;
-    width: 10%;
-    padding: 1;
-    margin: 1;
+    height: 3; /* border needs at least 3 */
+    padding: 0;
+    margin: 0;
     border: solid $accent;
     background: $secondary;
 }
 #cmd-args {
-    height: 1;
-    width: 80%;
-    padding: 1;
-    margin: 1;
+    height: 3; /* border needs at least 3 */
+    padding: 0;
+    margin: 0;
     border: solid $accent;
     background: $secondary;
 }

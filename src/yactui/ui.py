@@ -1,3 +1,4 @@
+from curses.ascii import isdigit
 import enum
 from logging import info
 import textual
@@ -12,14 +13,17 @@ from textual.widgets import (
     Tree,
     RichLog,
     Input,
+    Label,
+    Button,
     # UnknownNodeID,
 )
+from textual.validation import Function, Number, ValidationResult, Validator
 from textual.containers import Vertical, Horizontal
 
 # from textual.reactive import Reactive
 from .node import CyphalNode
 
-from .data import Health, Mode, Node
+from .data import Health, Mode, Node, Status, Command
 
 
 class CyphalTUI(App):
@@ -44,15 +48,19 @@ class CyphalTUI(App):
     nodes: Dict[int, Node]
     node_id: int
     selected_node: Optional[int]  # Uses the Node ID of the selected node in the tree
+    verbose: bool = False
 
     CSS_PATH = "yactui.tcss"
     BINDINGS = [("q", "quit", "Quit the application")]
 
-    def __init__(self, nodes: List[CyphalNode], **kwargs: Any) -> None:
+    def __init__(
+        self, nodes: List[CyphalNode], verbose: bool = False, **kwargs: Any
+    ) -> None:
         super().__init__(**kwargs)
         self.cyphal_nodes = nodes
         self.node_id = 0
         self.selected_node = None
+        self.verbose = verbose
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -63,9 +71,32 @@ class CyphalTUI(App):
         with Vertical(id="right-pane"):  # Container for info and log viewers
             yield Static(id="info-viewer")
             with Horizontal(id="command-bar"):
-                yield Input("Node ID:", id="cmd-node")
-                yield Input("Command:", id="cmd")
-                yield Input("Args:", id="cmd-args")
+                with Vertical(id="cmd-node-area"):
+                    yield Label("Node ID:")
+                    yield Input(
+                        placeholder="int 1-127",
+                        id="cmd-node",
+                        validate_on=["changed"],
+                        validators=[Number(minimum=1, maximum=127)],
+                    )
+                with Vertical(id="cmd-command-area"):
+                    yield Label("Command:")
+                    yield Input(
+                        placeholder="int or word",
+                        id="cmd",
+                        validate_on=["changed"],
+                        validators=[],
+                    )
+                with Vertical(id="cmd-args-area"):
+                    yield Label("Args:")
+                    yield Input(
+                        id="cmd-args",
+                        placeholder="optional arguments",
+                        valid_empty=True,
+                    )
+                with Vertical(id="cmd-send-area"):
+                    yield Label(" ")
+                    yield Button(label="Send", id="cmd-send", variant="success")
             yield RichLog(id="log-viewer")
         yield Footer()
 
@@ -96,7 +127,7 @@ Name: {node.name}
 Software Version: {node.software_version[0]}.{node.software_version[1]}
 Hardware Version: {node.hardware_version[0]}.{node.hardware_version[1]}
 Revision: {hex(node.revision)}
-CRC64WE: {hex(node.crc64we) if len(node.crc64we) > 0 else 'N/A'}
+CRC64WE: {hex(node.crc64we[0]) if len(node.crc64we) > 0 else 'N/A'}
 UUID: {node.unique_id.hex()}
 Publishers: {node.publishers}
 Subscribers: {node.subscribers}
@@ -154,10 +185,22 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
         log_viewer = self.query_one("#log-viewer", RichLog)
         # do not clear the log! just append new entries
         for cyphal_node in self.cyphal_nodes:
-            for log in cyphal_node.diagnostics:
+            while len(cyphal_node.diagnostics) > 0:
+                log = cyphal_node.diagnostics.popleft()
                 log_viewer.write(
                     f"[{log.node_id}][{log.timestamp}] {log.level}: {log.message}"
                 )
+
+            while len(cyphal_node.results) > 0:
+                result = cyphal_node.results.popleft()
+                if result.status == Status.DID_NOT_SEND:
+                    log_viewer.write(
+                        f"[{result.server_node_id}] Command Result: DID NOT SEND"
+                    )
+                else:
+                    log_viewer.write(
+                        f"[{result.server_node_id}] Command Result: {result.status} - {result.output}"
+                    )
 
     def get_node_id_from_label(self, label: str) -> Optional[int]:
         """Extract the Node ID from a tree node label."""
@@ -169,6 +212,50 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
                 return None
         return None
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Submitted Command Input"""
+        input_id = event.input.id
+        input_value = event.value.strip()
+
+        if input_id == "cmd-node":
+            self.node_id = int(input_value)
+        elif input_id == "cmd":
+            self.command = input_value
+        elif input_id == "cmd-args":
+            self.command_args = input_value
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        log_viewer = self.query_one("#log-viewer", RichLog)
+        # get the node, command, and args from the input fields
+        cmd_node_input = self.query_one("#cmd-node", Input)
+        cmd_input = self.query_one("#cmd", Input)
+        cmd_args_input = self.query_one("#cmd-args", Input)
+        self.node_id = int(cmd_node_input.value)
+        cmd = cmd_input.value.strip()
+        try:
+            self.command = int(cmd)
+        except ValueError:
+            self.command = cmd  # as str
+        self.command_args = cmd_args_input.value.strip()
+        if self.verbose:
+            log_viewer.write(
+                f"Button '{event.button.id}' pressed. Node Id: {self.node_id}"
+            )
+        # Send command to the selected node to the node which knows it
+        for cyphal_node in self.cyphal_nodes:
+            if self.node_id in cyphal_node.known_nodes.keys():
+                if self.verbose:
+                    log_viewer.write(
+                        f"Sending command '{self.command}' with args '{self.command_args}' to Node ID {self.node_id} via {cyphal_node.transport_type}"
+                    )
+                asyncio.create_task(
+                    cyphal_node.send_command(
+                        server_node_id=self.node_id,
+                        command=self.command,
+                        args=self.command_args,
+                    )
+                )
+
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         """Handle node selection in the tree to display node details."""
         log_viewer = self.query_one("#log-viewer", RichLog)
@@ -176,8 +263,12 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
 
         label = str(event.node.label)
         self.selected_node = event.node.id
-        log_viewer.write(f"Selected node: {label}:{self.selected_node}")
+        if self.verbose:
+            log_viewer.write(f"Selected node: {label}:{self.selected_node}")
         self.node_id = self.get_node_id_from_label(label) or 0
+        # update the cmd node input box
+        cmd_node_input = self.query_one("#cmd-node", Input)
+        cmd_node_input.value = str(self.node_id)
         for node in self.cyphal_nodes:
             if self.node_id in node.known_nodes.keys():
                 info_viewer.update(self.node_to_string(node.known_nodes[self.node_id]))
