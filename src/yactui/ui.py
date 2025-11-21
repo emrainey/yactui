@@ -15,6 +15,7 @@ from textual.widgets import (
     Input,
     Label,
     Button,
+    Switch,
     # UnknownNodeID,
 )
 from textual.validation import Function, Number, ValidationResult, Validator
@@ -53,9 +54,7 @@ class CyphalTUI(App):
     CSS_PATH = "yactui.tcss"
     BINDINGS = [("q", "quit", "Quit the application")]
 
-    def __init__(
-        self, nodes: List[CyphalNode], verbose: bool = False, **kwargs: Any
-    ) -> None:
+    def __init__(self, nodes: List[CyphalNode], verbose: bool = False, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.cyphal_nodes = nodes
         self.node_id = 0
@@ -96,7 +95,10 @@ class CyphalTUI(App):
                     )
                 with Vertical(id="cmd-send-area"):
                     yield Label(" ")
-                    yield Button(label="Send", id="cmd-send", variant="success")
+                    yield Button(label="Send", id="btn-send", variant="success")
+                with Vertical(id="time-switch-area"):
+                    yield Label("TimeSync:")
+                    yield Switch(id="time-switch", value=True)
             yield RichLog(id="log-viewer")
         yield Footer()
 
@@ -177,9 +179,7 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
             if self.node_id > 0:
                 for cyphal_node in self.cyphal_nodes:
                     if self.node_id in cyphal_node.known_nodes.keys():
-                        info_viewer.update(
-                            self.node_to_string(cyphal_node.known_nodes[self.node_id])
-                        )
+                        info_viewer.update(self.node_to_string(cyphal_node.known_nodes[self.node_id]))
                         break
 
         log_viewer = self.query_one("#log-viewer", RichLog)
@@ -187,20 +187,14 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
         for cyphal_node in self.cyphal_nodes:
             while len(cyphal_node.diagnostics) > 0:
                 log = cyphal_node.diagnostics.popleft()
-                log_viewer.write(
-                    f"[{log.node_id}][{log.timestamp}] {log.level}: {log.message}"
-                )
+                log_viewer.write(f"[{log.node_id}][{log.timestamp}] {log.level}: {log.message}")
 
             while len(cyphal_node.results) > 0:
                 result = cyphal_node.results.popleft()
                 if result.status == Status.DID_NOT_SEND:
-                    log_viewer.write(
-                        f"[{result.server_node_id}] Command Result: DID NOT SEND"
-                    )
+                    log_viewer.write(f"[{result.server_node_id}] Command Result: DID NOT SEND")
                 else:
-                    log_viewer.write(
-                        f"[{result.server_node_id}] Command Result: {result.status} - {result.output}"
-                    )
+                    log_viewer.write(f"[{result.server_node_id}] Command Result: {result.status} - {result.output}")
 
     def get_node_id_from_label(self, label: str) -> Optional[int]:
         """Extract the Node ID from a tree node label."""
@@ -224,8 +218,21 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
         elif input_id == "cmd-args":
             self.command_args = input_value
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        """Handle Time Sync Switch Changed"""
+        if event.switch.id != "time-switch":
+            return
+        time_sync_enabled = event.value
         log_viewer = self.query_one("#log-viewer", RichLog)
+        log_viewer.write(f"Time Synchronization {'enabled' if time_sync_enabled else 'disabled'}.")
+        for cyphal_node in self.cyphal_nodes:
+            cyphal_node.time_sync_enabled = time_sync_enabled
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle Send Button Pressed"""
+        log_viewer = self.query_one("#log-viewer", RichLog)
+        if event.button.id != "btn-send":
+            return
         # get the node, command, and args from the input fields
         cmd_node_input = self.query_one("#cmd-node", Input)
         cmd_input = self.query_one("#cmd", Input)
@@ -238,9 +245,7 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
             self.command = cmd  # as str
         self.command_args = cmd_args_input.value.strip()
         if self.verbose:
-            log_viewer.write(
-                f"Button '{event.button.id}' pressed. Node Id: {self.node_id}"
-            )
+            log_viewer.write(f"Button '{event.button.id}' pressed. Node Id: {self.node_id}")
         # Send command to the selected node to the node which knows it
         for cyphal_node in self.cyphal_nodes:
             if self.node_id in cyphal_node.known_nodes.keys():

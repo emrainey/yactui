@@ -70,6 +70,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=f"{os.getenv('HOME')}/cyphal/generated",
         help="The generated path for the Cyphal generated types default=%(default)s",
     )
+    parser.add_argument(
+        "--exemplar",
+        action="store_true",
+        help="Run the exemplar node instead of the TUI",
+    )
+    parser.add_argument(
+        "--file-server-folder",
+        action="append",
+        default=["."],
+        help="The folder to serve files from when running the exemplar node default=%(default)s",
+    )
 
     args = parser.parse_args(argv)
 
@@ -83,34 +94,38 @@ def main(argv: Optional[List[str]] = None) -> int:
     cyphal_path = pathlib.Path(args.cyphal_path).resolve()
     generated_path = pathlib.Path(args.gen_path).resolve()
 
-    assert os.path.exists(
-        cyphal_path
-    ), f"The specified Cyphal path does not exist: {cyphal_path}"
-    assert os.path.exists(
-        generated_path
-    ), f"The specified generated path does not exist: {generated_path}"
-
-    # os.environ["UAVCAN__LOGGING__LEVEL"] = str(logger.level)
-    # os.environ["UAVCAN__NODE__ID"] = str(args.node_id)
-    # os.environ["UAVCAN__UDP__IFACE"] = str(args.ip)
-    # os.environ["UAVCAN__UDP__MTU"] = str(args.mtu)
-    # os.environ["CYPHAL_PATH"] = str(cyphal_path)
-    # os.environ["CYPHAL_ALLOW_UNREGULATED_FIXED_PORT_ID"] = "true"
+    assert os.path.exists(cyphal_path), f"The specified Cyphal path does not exist: {cyphal_path}"
+    assert os.path.exists(generated_path), f"The specified generated path does not exist: {generated_path}"
     sys.path.append(str(generated_path))
 
     async def run_apps():
-        node = CyphalNode(
-            node_id=args.node_id,
-            ip=args.ip,
-        )
-        app = CyphalTUI(nodes=[node])
-        try:
-            # asyncio.run(app.run_async())
-            await asyncio.gather(node.start(), app.run_async())
-        except KeyboardInterrupt:
-            pass
-        finally:
-            node.close()
+        if args.exemplar:
+            from .exemplar import ExemplarNode
+
+            print("Running Exemplar Node...")
+            exemplar = ExemplarNode(
+                node_id=args.node_id,
+                ip=args.ip,
+                inf=args.interface,
+                mtu=args.mtu,
+            )
+            try:
+                await exemplar.start()
+            except KeyboardInterrupt:
+                pass
+            finally:
+                exemplar.close()
+            return
+        else:
+            node = CyphalNode(node_id=args.node_id, ip=args.ip, file_server_folders=args.file_server_folder)
+            app = CyphalTUI(nodes=[node])
+            try:
+                # asyncio.run(app.run_async())
+                await asyncio.gather(node.start(), app.run_async())
+            except KeyboardInterrupt:
+                pass
+            finally:
+                node.close()
 
     asyncio.run(run_apps())
     return 0
