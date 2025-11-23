@@ -108,7 +108,7 @@ def make_cyphal_node(
         software_version=(0, 0),
         hardware_version=(0, 0),
         revision=0,
-        crc64we=0,
+        crc64we=[0],
         unique_id=b"",
         certificate=b"",
         publishers=[],

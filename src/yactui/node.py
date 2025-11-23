@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional, Union
 from pycyphal.application import make_node, NodeInfo, register
 from pycyphal.application.file import FileServer
 
+from yactui import MonotonicClock, TimeSyncer, make_transport
+
 GetInfo = uavcan.node.GetInfo_1_0  # type: ignore
 Heartbeat = uavcan.node.Heartbeat_1_0  # type: ignore
 Record = uavcan.diagnostic.Record_1_1  # type: ignore
@@ -52,24 +54,30 @@ UPDATE_PERIOD = 1.0  # seconds
 MTU_GUESS = 1500 - 20 - 8 - 24  # Default MTU for Cyphal/UDP
 
 
-class CyphalNode:
+class CyphalNode(MonotonicClock):
     """Holds the Cyphal Node and pub/subs"""
 
+    receive_event: asyncio.Event
     diagnostics: collections.deque[Log]
     current_time: float = 0.0
     previous_time: float = 0.0
     captured_time: float = 0.0
-    receive_event: asyncio.Event
     running: bool
     known_nodes: Dict[int, Node]
     query_nodes: collections.deque[int]
-    node_info: GetInfo.Response
+    node_info: GetInfo.Response  # type: ignore
     subscribers: Dict[str, Any]
     publishers: Dict[str, Any]
     clients: Dict[str, Any]
     servers: Dict[str, Any]
     results: collections.deque[Result]
     time_sync_enabled: bool
+    transport: Union[
+        pycyphal.transport.udp.UDPTransport,
+        pycyphal.transport.can.CANTransport,
+        pycyphal.transport.serial.SerialTransport,
+    ]
+    transport_type: str
 
     def __init__(
         self,
@@ -80,33 +88,12 @@ class CyphalNode:
         file_server_folders: List[str] = ["."],
     ) -> None:
         """Constructor"""
-        if ip is not None:
-            self.transport_type = "UDP"
-            self.transport = pycyphal.transport.udp.UDPTransport(
-                local_ip_address=ip,
-                local_node_id=node_id,
-                mtu=mtu,
-            )
-        elif "can" in inf:
-            # UNTESTED!
-            self.transport_type = "CAN"
-            self.transport = pycyphal.transport.can.CANTransport(
-                interface_name=inf,
-                local_node_id=node_id,
-                mtu=mtu,
-            )
-        else:
-            # UNTESTED!
-            self.transport_type = "Serial"
-            self.transport = pycyphal.transport.serial.SerialTransport(
-                port_name=inf,
-                local_node_id=node_id,
-                mtu=mtu,
-            )
+        self.receive_event = asyncio.Event()
+        self.transport_type, self.transport = make_transport(ip, inf, mtu, node_id)
         self.diagnostics = collections.deque(maxlen=100)
         self.results = collections.deque(maxlen=100)
-        self.query_nodes = []
-        self.known_nodes = {}
+        self.query_nodes = collections.deque()
+        self.known_nodes = dict()
         self.node_info = NodeInfo(name="org.opencyphal.yactui", software_version=Version(0, 1))
         self.node = make_node(info=self.node_info, transport=self.transport)
         self.node.heartbeat_publisher.mode = Mode.INITIALIZATION
@@ -129,10 +116,14 @@ class CyphalNode:
             "time": self.node.get_server(SynchronizationMaster),
         }
         self.file_server = FileServer(self.node, roots=file_server_folders)
-        self.receive_event = asyncio.Event()
         self.running = True
         self.time_sync_enabled = True
+        self.time_sync = TimeSyncer(clock=self, client_not_server=True)
         self.node.start()
+
+    def get_time_microseconds(self) -> int:
+        """Get the current time in microseconds"""
+        return int(time.monotonic() * 1_000_000)
 
     def get_time_message(self) -> TimeSynchronization:
         """Create a time message with the current time"""
@@ -147,7 +138,7 @@ class CyphalNode:
     def diagnostic(self, level: Severity, message: str = "") -> Record:
         """Log a message to the Cyphal transport which we use"""
         return Record(
-            timestamp=TimeStamp(microsecond=int(time.time() * 1_000_000)),
+            timestamp=TimeStamp(microsecond=int(time.monotonic() * 1_000_000)),
             severity=uavcan.diagnostic.Severity_1_0(int(level)),
             text=message,
         )
@@ -172,7 +163,7 @@ class CyphalNode:
         msg = self.diagnostic(Severity.ERROR, message)
         await self.publishers["diagnostic"].publish(msg)
 
-    async def start(self):
+    async def start(self) -> None:
         await asyncio.create_task(self.run())
 
     def mask_to_list(self, mask: List[bool]) -> List[int]:
@@ -209,7 +200,10 @@ class CyphalNode:
                 return False  # the finally will still log the status
             msg, metadata = response
             assert isinstance(msg, ExecuteCommand.Response)
-            respondent = metadata.source_node_id
+            if metadata.source_node_id is not None:
+                respondent = metadata.source_node_id
+            else:
+                respondent = server_node_id
             status = Status(msg.status)
             response_message = msg.output.tobytes().decode("utf-8", errors="ignore")
         finally:
@@ -223,14 +217,14 @@ class CyphalNode:
             )
         return True
 
-    async def run(self):
+    async def run(self) -> None:
 
         ###############################
         # Setup Subscription Callbacks
         ###############################
 
         def on_heartbeat(msg: Heartbeat, txfr: pycyphal.transport.TransferFrom) -> None:
-            if txfr.source_node_id not in self.known_nodes.keys():
+            if txfr.source_node_id is not None and txfr.source_node_id not in self.known_nodes.keys():
                 self.known_nodes[txfr.source_node_id] = make_cyphal_node(
                     txfr.source_node_id,
                     msg.health.value,
@@ -243,9 +237,9 @@ class CyphalNode:
                 self.known_nodes[txfr.source_node_id].mode = Mode(msg.mode.value)
                 self.known_nodes[txfr.source_node_id].uptime = msg.uptime
                 self.known_nodes[txfr.source_node_id].vendor_specific_status_code = msg.vendor_specific_status_code
-            # once we find it, add it to the query list
-            self.query_nodes.append(txfr.source_node_id)
-            # new data!
+            if txfr.source_node_id is not None:
+                # once we find it, add it to the query list
+                self.query_nodes.append(txfr.source_node_id)
             self.receive_event.set()
 
         self.subscribers["heartbeat"].receive_in_background(on_heartbeat)
@@ -260,7 +254,6 @@ class CyphalNode:
                 # )
                 self.known_nodes[txfr.source_node_id].clients = self.mask_to_list(msg.clients.mask)
                 self.known_nodes[txfr.source_node_id].servers = self.mask_to_list(msg.servers.mask)
-            # new data!
             self.receive_event.set()
 
         self.subscribers["portlist"].receive_in_background(on_portlist)
@@ -279,16 +272,16 @@ class CyphalNode:
         self.subscribers["diagnostic"].receive_in_background(on_diagnostic)
 
         def on_time(
-            msg: TimeSynchronization,
+            msg: TimeSynchronization,  # type: ignore
             txfr: pycyphal.transport.TransferFrom,
         ) -> None:
             # Just update the captured time
-            self.captured_time = float(msg.previous_transmission_timestamp_microsecond) / 1_000_000
+            self.time_sync.on_receive_previous_time_microseconds(msg.previous_transmission_timestamp_microsecond)
             self.diagnostics.append(
                 make_log(
-                    timestamp_microseconds=self.captured_time,
+                    timestamp_microseconds=self.time_sync.get_current_time_microseconds(),
                     level=Severity.INFO,
-                    message=f"Received time sync from Node ID {txfr.source_node_id}: {self.captured_time}",
+                    message=f"Received previous time microsecond sync from Node ID {txfr.source_node_id}: {msg.previous_transmission_timestamp_microsecond}",
                     node_id=self.node.id,
                 )
             )
@@ -317,6 +310,7 @@ class CyphalNode:
                         # timeout, try again later
                         self.query_nodes.append(server_node_id)
                         continue
+                    self.receive_event.set()
                     # split the tuple up
                     msg, metadata = response
                     assert isinstance(msg, GetInfo.Response)
@@ -349,9 +343,12 @@ class CyphalNode:
                     if response is None:
                         # timeout
                         continue
-                    self.known_nodes[node_id].number_emitted = response.transfer_statistics.number_of_emitted_frames
-                    self.known_nodes[node_id].number_received = response.transfer_statistics.number_of_received_frames
-                    self.known_nodes[node_id].number_error = response.transfer_statistics.number_of_error_frames
+                    self.receive_event.set()
+                    msg, metadata = response
+                    assert isinstance(msg, TransportStatistics.Response)
+                    self.known_nodes[node_id].number_emitted = msg.transfer_statistics.number_of_emitted_frames
+                    self.known_nodes[node_id].number_received = msg.transfer_statistics.number_of_received_frames
+                    self.known_nodes[node_id].number_error = msg.transfer_statistics.number_of_error_frames
                 finally:
                     client.close()
             await asyncio.sleep(next_update_at - asyncio.get_running_loop().time())

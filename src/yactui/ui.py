@@ -102,7 +102,7 @@ class CyphalTUI(App):
             yield RichLog(id="log-viewer")
         yield Footer()
 
-    async def on_mount(self):
+    async def on_mount(self) -> None:
         self.node_tree.clear()
         # Populate the node tree with dummy data for demonstration
         # add a branch for Cyphal/UDP
@@ -171,7 +171,7 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
             # convert the label to a Cyphal node ID (different)
             try:
                 node = self.node_tree.get_node_by_id(self.selected_node)
-                label = str(node.label)
+                label = node.label()
                 self.node_id = self.get_node_id_from_label(label) or 0
             except Exception as e:
                 label = ""

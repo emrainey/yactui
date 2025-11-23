@@ -33,7 +33,7 @@ Screen {
 #cmd-node-area {
     width: 10%;
 }
-#cmd-number-area {
+#cmd-command-area {
     width: 20%;
 }
 #cmd-args-area {

@@ -2,11 +2,22 @@
     "python-envs.pythonProjects": [
         {}
     ],
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
     "python.terminal.activateEnvironment": true,
     "python-env.workspaceSearchPaths": [
         "${workspaceFolder}/.venv",
     ],
+    "python.envFile": "${workspaceFolder}/.env",
+    "python.terminal.useEnvFile": true,
     "cSpell.words": [
-        "cyphal"
-    ]
+        "cyphal",
+        "pycyphal",
+        "reg",
+        "udral",
+        "uavcan"
+    ],
+    "terminal.integrated.env.osx": {
+        "PYTHONPATH": "${env:HOME}/cyphal/generated:${env:PYTHONPATH}"
+    },
+    "python.globalModuleInstallation": true,
 }

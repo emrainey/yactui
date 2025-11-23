@@ -98,7 +98,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     assert os.path.exists(generated_path), f"The specified generated path does not exist: {generated_path}"
     sys.path.append(str(generated_path))
 
-    async def run_apps():
+    async def run_apps() -> None:
         if args.exemplar:
             from .exemplar import ExemplarNode
 
