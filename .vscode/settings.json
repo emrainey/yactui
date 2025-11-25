@@ -17,7 +17,8 @@
         "uavcan"
     ],
     "terminal.integrated.env.osx": {
-        "PYTHONPATH": "${env:HOME}/cyphal/generated:${env:PYTHONPATH}"
+        "CYPHAL_PATH": "${env:HOME}/cyphal/dsdl",
+        "PYCYPHAL_PATH": "${env:HOME}/cyphal/generated",
     },
     "python.globalModuleInstallation": true,
 }

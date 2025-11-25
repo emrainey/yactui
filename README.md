@@ -37,17 +37,22 @@ I setup a python virtual env with this:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install yakut==0.13.0 textual
+# Required
+pip install textual pycyphal
+# Only use these to test, not needed for runtime
+pip install yakut==0.13.0 textual-dev
 # Install yactui from here as editable
 pip install -e .
 ```
 
-This is the contents of the .env I use. I've setup a `cyphal` folder in my home directory which has the [UAVCAN Data Types](https://github.com/OpenCyphal/public_regulated_data_types) in the `dsdl` folder and I've
-precompiled them to the `generated` folder.
+This is the contents of the .env I use. I've setup a `cyphal` folder in my home directory which has the [UAVCAN Data Types](https://github.com/OpenCyphal/public_regulated_data_types) in the `dsdl` folder and I've precompiled them to the `generated` folder.
 
 ```bash
 export CYPHAL_PATH=$HOME/cyphal/dsdl
+export PYCYPHAL_PATH=$HOME/cyphal/generated
+# if you want to use Yakut
 export YAKUT_PATH=$HOME/cyphal/generated
+# If you have problems with the auto DSDL generation
 export PYTHONPATH=$HOME/cyphal/generated
 ```
 
@@ -58,6 +63,7 @@ No need to set `UAVCAN__NODE__ID` or `UAVCAN__UDP__IFACE`.
 ```bash
 # Using yakut <= 0.13.0
 yakut -v compile -O ${YAKUT_PATH} ${CYPHAL_PATH}/uavcan ${CYPHAL_PATH}/reg
+# After 0.13.0 it's automatic if you have CYPHAL_PATH and PYCYPHAL_PATH set.
 ```
 
 ### Command Options
@@ -76,33 +82,26 @@ Options:
                         The network interface to bind to for Cyphal communication default=lo
   --ip IP               The IP address to bind to for Cyphal communication default=127.0.0.1
   --mtu MTU             The MTU to use for Cyphal communication default=1448
-  --cyphal-path CYPHAL_PATH
-                        The path to the Cyphal generated types default=$HOME/cyphal/dsdl
-  --gen-path GEN_PATH   The generated path for the Cyphal generated types default=$HOME/cyphal/generated
 ```
-
-## Known Issues
-
-* `--cyphal-path` Doesn't work quite right as the path is needed during import time, not arg parsing time.
 
 ## Debugging
 
 You can use `textual`'s console to capture some UI events and see some logging output, sometimes. No every crash can be captured this way.
 
 ```bash
-# In this project folder
+# Assuming all the exported variables above as used!!
+# Assuming use of
 source .venv/bin/activate
-pip install textual-dev
+
+# In this project folder, in a terminal window
 textual console
 
-# In another window
-source .venv/bin/activate
-PYTHONPATH=${CYPHAL_PATH} textual run --dev src/yactui/cli.py --node-id 97
+# In another terminal window
+textual run --dev src/yactui/cli.py --node-id 97
 
-# In another window
-source .venv/bin/activate
+# In another terminal window
 # The exemplar uses all the right message definitions to exercise the TUI
-PYTHONPATH=${CYPHAL_PATH} yactui --node-id 98 --exemplar
+yactui --node-id 98 --exemplar
 ```
 
 ## TODO

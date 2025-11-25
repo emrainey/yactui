@@ -55,21 +55,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=MTU_GUESS,
         help="The MTU to use for Cyphal communication default=%(default)s",
     )
-    # the path to the cyphal generated types
-    parser.add_argument(
-        "--cyphal-path",
-        action="store",
-        type=pathlib.Path,
-        default=f"{os.getenv('HOME')}/cyphal/dsdl",
-        help="The path to the Cyphal generated types default=%(default)s",
-    )
-    parser.add_argument(
-        "--gen-path",
-        action="store",
-        type=pathlib.Path,
-        default=f"{os.getenv('HOME')}/cyphal/generated",
-        help="The generated path for the Cyphal generated types default=%(default)s",
-    )
     parser.add_argument(
         "--exemplar",
         action="store_true",
@@ -90,13 +75,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         logger.setLevel(logging.INFO)
     if args.verbose > 2:
         logger.setLevel(logging.DEBUG)
-
-    cyphal_path = pathlib.Path(args.cyphal_path).resolve()
-    generated_path = pathlib.Path(args.gen_path).resolve()
-
-    assert os.path.exists(cyphal_path), f"The specified Cyphal path does not exist: {cyphal_path}"
-    assert os.path.exists(generated_path), f"The specified generated path does not exist: {generated_path}"
-    sys.path.append(str(generated_path))
 
     async def run_apps() -> None:
         if args.exemplar:
