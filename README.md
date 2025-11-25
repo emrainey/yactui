@@ -61,6 +61,25 @@ Options:
 
 * `--cyphal-path` Doesn't work quite right as the path is needed during import time, not arg parsing time.
 
+## Debugging
+
+You can use `textual`'s console to capture some UI events and see some logging output, sometimes. No every crash can be captured this way.
+
+```bash
+# In this project folder
+source .venv/bin/activate
+pip install textual-dev
+textual console
+
+# In another window
+source .venv/bin/activate
+PYTHONPATH=${CYPHAL_PATH} textual run --dev src/yactui/cli.py --node-id 97
+
+# In another window
+source .venv/bin/activate
+PYTHONPATH=${CYPHAL_PATH} yactui --node-id 98 --exemplar
+```
+
 ## TODO
 
 * Test CAN interfaces

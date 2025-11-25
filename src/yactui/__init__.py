@@ -42,7 +42,7 @@ class TimeSyncer:
     # The monotonic clock to use
     clock: MonotonicClock
 
-    TIMEOUT: int = 30_000_000  # microseconds
+    TIMEOUT_MICROSECONDS: int = 30_000_000  # microseconds
     SERVER_LIMIT: int = 3  # number of syncs before switching modes
     CLIENT_LIMIT: int = 1  # number of syncs needed before a new basis is computed
 
@@ -80,7 +80,7 @@ class TimeSyncer:
         now: int = self.clock.get_time_microseconds()
         # if we're a client and we haven't receive any time syncs within the timeout, become a server
         diff = now - self.last_received_monotonic_microseconds
-        if not self.time_sync_server and diff > self.TIMEOUT:
+        if not self.time_sync_server and diff > self.TIMEOUT_MICROSECONDS:
             # this means we'll ignore up to LIMIT received time syncs before switching back to client mode
             logger.debug("No time syncs received, switching to Time Sync Server mode")
             self.time_sync_server = True

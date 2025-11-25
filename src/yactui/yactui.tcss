@@ -40,7 +40,12 @@ Screen {
     width: 50%;
 }
 #cmd-send-area {
-    width: 30%;
+    width: 8;
+}
+#btn-send {
+    min-width: 7;
+    height: 3;
+    border: none;
 }
 #cmd-node {
     height: 3; /* border needs at least 3 */

@@ -21,22 +21,22 @@ from pycyphal.application.file import FileServer
 
 from yactui import MonotonicClock, TimeSyncer, make_transport
 
-GetInfo = uavcan.node.GetInfo_1_0  # type: ignore
-Heartbeat = uavcan.node.Heartbeat_1_0  # type: ignore
-Record = uavcan.diagnostic.Record_1_1  # type: ignore
-TimeSynchronization = uavcan.time.Synchronization_1_0  # type: ignore
-TimeStamp = uavcan.time.SynchronizedTimestamp_1_0  # type: ignore
-# Severity = uavcan.diagnostic.Severity_1_0  # type: ignore
-SynchronizationMaster = uavcan.time.GetSynchronizationMasterInfo_0_1  # type: ignore
-ExecuteCommand = uavcan.node.ExecuteCommand_1_3  # type: ignore
-PortList = uavcan.node.port.List_1_0  # type: ignore
-Version = uavcan.node.Version_1_0  # type: ignore
-# Mode = uavcan.node.Mode_1  # type: ignore
-# Health = uavcan.node.Health_1  # type: ignore
-TransportStatistics = uavcan.node.GetTransportStatistics_0_1  # type: ignore
+GetInfo = uavcan.node.GetInfo_1_0
+Heartbeat = uavcan.node.Heartbeat_1_0
+Record = uavcan.diagnostic.Record_1_1
+TimeSynchronization = uavcan.time.Synchronization_1_0
+TimeStamp = uavcan.time.SynchronizedTimestamp_1_0
+# Severity = uavcan.diagnostic.Severity_1_0
+SynchronizationMaster = uavcan.time.GetSynchronizationMasterInfo_0_1
+ExecuteCommand = uavcan.node.ExecuteCommand_1_3
+PortList = uavcan.node.port.List_1_0
+Version = uavcan.node.Version_1_0
+# Mode = uavcan.node.Mode_1
+# Health = uavcan.node.Health_1
+TransportStatistics = uavcan.node.GetTransportStatistics_0_1
 
 # Dataclasses for Cyphal Node
-from .data import (
+from yactui.data import (
     Node,
     Mode,
     Health,
@@ -65,7 +65,7 @@ class CyphalNode(MonotonicClock):
     running: bool
     known_nodes: Dict[int, Node]
     query_nodes: collections.deque[int]
-    node_info: GetInfo.Response  # type: ignore
+    node_info: GetInfo.Response
     subscribers: Dict[str, Any]
     publishers: Dict[str, Any]
     clients: Dict[str, Any]
@@ -166,6 +166,16 @@ class CyphalNode(MonotonicClock):
     async def start(self) -> None:
         await asyncio.create_task(self.run())
 
+    def subjectlist_to_list(self, subject_list: uavcan.node.port.SubjectList_1_0) -> List[int]:
+        # if subject_list.total is None:
+        #     return []
+        if subject_list.mask is not None:
+            return self.mask_to_list(subject_list.mask)
+        elif subject_list.sparse_list is not None:  # sparse list
+            return [port.value for port in subject_list.sparse_list]
+        else:
+            return []
+
     def mask_to_list(self, mask: List[bool]) -> List[int]:
         """Convert a boolean mask to a list of indices where the mask is True"""
         return [i for i, bit in enumerate(mask) if bit]
@@ -176,6 +186,16 @@ class CyphalNode(MonotonicClock):
         status: Status = Status.DID_NOT_SEND
         response_message: str = ""
         respondent: int = server_node_id
+        if respondent < 0 or respondent > 127:
+            response_message = f"Invalid Node ID: {respondent}"
+            self.results.append(
+                make_result(
+                    status=Status.DID_NOT_SEND,
+                    output=response_message,
+                    server_node_id=respondent,
+                )
+            )
+            return False
         try:
             # map the strings to command numbers from Cyphal
             if isinstance(command, int):
@@ -224,7 +244,9 @@ class CyphalNode(MonotonicClock):
         ###############################
 
         def on_heartbeat(msg: Heartbeat, txfr: pycyphal.transport.TransferFrom) -> None:
-            if txfr.source_node_id is not None and txfr.source_node_id not in self.known_nodes.keys():
+            if txfr.source_node_id is None:
+                return  # can't do much if it's not known
+            if txfr.source_node_id not in self.known_nodes.keys():
                 self.known_nodes[txfr.source_node_id] = make_cyphal_node(
                     txfr.source_node_id,
                     msg.health.value,
@@ -237,7 +259,7 @@ class CyphalNode(MonotonicClock):
                 self.known_nodes[txfr.source_node_id].mode = Mode(msg.mode.value)
                 self.known_nodes[txfr.source_node_id].uptime = msg.uptime
                 self.known_nodes[txfr.source_node_id].vendor_specific_status_code = msg.vendor_specific_status_code
-            if txfr.source_node_id is not None:
+
                 # once we find it, add it to the query list
                 self.query_nodes.append(txfr.source_node_id)
             self.receive_event.set()
@@ -246,12 +268,8 @@ class CyphalNode(MonotonicClock):
 
         def on_portlist(msg: PortList, txfr: pycyphal.transport.TransferFrom) -> None:
             if txfr.source_node_id in self.known_nodes.keys():
-                # self.known_nodes[txfr.source_node_id].publishers = self.mask_to_list(
-                #     msg.publishers.mask
-                # )
-                # self.known_nodes[txfr.source_node_id].subscribers = self.mask_to_list(
-                #     msg.subscribers.mask
-                # )
+                self.known_nodes[txfr.source_node_id].publishers = self.subjectlist_to_list(msg.publishers)
+                self.known_nodes[txfr.source_node_id].subscribers = self.subjectlist_to_list(msg.subscribers)
                 self.known_nodes[txfr.source_node_id].clients = self.mask_to_list(msg.clients.mask)
                 self.known_nodes[txfr.source_node_id].servers = self.mask_to_list(msg.servers.mask)
             self.receive_event.set()
@@ -272,7 +290,7 @@ class CyphalNode(MonotonicClock):
         self.subscribers["diagnostic"].receive_in_background(on_diagnostic)
 
         def on_time(
-            msg: TimeSynchronization,  # type: ignore
+            msg: TimeSynchronization,
             txfr: pycyphal.transport.TransferFrom,
         ) -> None:
             # Just update the captured time

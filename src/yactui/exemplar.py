@@ -16,22 +16,22 @@ import uavcan.node  # noqa
 import uavcan.diagnostic  # noqa
 import uavcan.time  # noqa
 
-GetInfo = uavcan.node.GetInfo_1_0  # type: ignore
-Version = uavcan.node.Version_1_0  # type: ignore
-TimeSynchronization = uavcan.time.Synchronization_1_0  # type: ignore
-SynchronizationMaster = uavcan.time.GetSynchronizationMasterInfo_0_1  # type: ignore
-TimeStamp = uavcan.time.SynchronizedTimestamp_1_0  # type: ignore
-# Severity = uavcan.diagnostic.Severity_1_0  # type: ignore
-Record = uavcan.diagnostic.Record_1_1  # type: ignore
-ExecuteCommand = uavcan.node.ExecuteCommand_1_3  # type: ignore
-# Mode = uavcan.node.Mode_1  # type: ignore
-# Health = uavcan.node.Health_1  # type: ignore
+GetInfo = uavcan.node.GetInfo_1_0
+Version = uavcan.node.Version_1_0
+TimeSynchronization = uavcan.time.Synchronization_1_0
+SynchronizationMaster = uavcan.time.GetSynchronizationMasterInfo_0_1
+TimeStamp = uavcan.time.SynchronizedTimestamp_1_0
+# Severity = uavcan.diagnostic.Severity_1_0
+Record = uavcan.diagnostic.Record_1_1
+ExecuteCommand = uavcan.node.ExecuteCommand_1_3
+# Mode = uavcan.node.Mode_1
+# Health = uavcan.node.Health_1
 
 from typing import Any, Dict, List, Optional, Union
 from pycyphal.application import make_node, NodeInfo, register
 
 # Dataclasses for Cyphal Node
-from .data import (
+from yactui.data import (
     Node,
     Mode,
     Health,
@@ -44,7 +44,7 @@ from .data import (
     make_log,
     make_result,
 )
-from . import TimeSyncer, MonotonicClock, make_transport
+from yactui import TimeSyncer, MonotonicClock, make_transport
 
 UPDATE_PERIOD = 1.0  # seconds
 MTU_GUESS = 1500 - 20 - 8 - 24  # Default MTU for Cyphal/UDP
@@ -56,7 +56,7 @@ logging.basicConfig(level=logging.INFO)
 class ExemplarNode(MonotonicClock):
     """A testing node for Cyphal TUI"""
 
-    node_info: GetInfo.Response  # type: ignore
+    node_info: GetInfo.Response
     subscribers: Dict[str, Any]
     publishers: Dict[str, Any]
     clients: Dict[str, Any]
@@ -115,7 +115,7 @@ class ExemplarNode(MonotonicClock):
         self.last_time_microseconds = self.time_sync.get_current_time_microseconds()
         return msg
 
-    def diagnostic(self, level: Severity, message: str = "") -> Record:  # type: ignore
+    def diagnostic(self, level: Severity, message: str = "") -> Record:
         """Log a message to the Cyphal transport which we use"""
         return Record(
             timestamp=TimeStamp(microsecond=self.time_sync.get_current_time_microseconds()),

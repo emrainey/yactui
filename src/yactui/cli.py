@@ -8,8 +8,8 @@ import argparse
 from typing import List, Optional
 from rich_argparse import RichHelpFormatter
 
-from .ui import CyphalTUI
-from .node import CyphalNode, MTU_GUESS
+from yactui.ui import CyphalTUI
+from yactui.node import CyphalNode, MTU_GUESS
 
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
@@ -129,3 +129,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     asyncio.run(run_apps())
     return 0
+
+
+# In case you want to run this module directly with `textual console`
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

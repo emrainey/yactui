@@ -20,7 +20,7 @@ class JumpClock(MonotonicClock):
         return self.current_time_microseconds
 
 
-def receive_time_sync(ts: TimeSyncer, basis_seconds: float, count: int, jumper: JumpClock) -> None:
+def receive_time_sync(ts: TimeSyncer, basis_seconds: float, count: int, jusmper: JumpClock) -> None:
     basis_microseconds = int(basis_seconds * 1_000_000)
     for i in range(count):
         jumper.jump(1_000_000)
@@ -72,10 +72,10 @@ def test_yactui_TimeSyncer_as_Client():
     assert new_time - old_time < 1.000002  # should be close to 1 second
     old_time = new_time
     # now test if the client switches to server mode after timeout
-    jumper.jump(int((ts.TIMEOUT + 1.0) * 1_000_000))
+    jumper.jump(int((ts.TIMEOUT_MICROSECONDS + 1.0) * 1_000_000))
     new_time = ts.get_current_time_seconds()
     assert new_time > old_time
-    assert new_time - old_time >= (ts.TIMEOUT + 1.0) / 1_000_000.0
+    assert new_time - old_time >= (ts.TIMEOUT_MICROSECONDS + 1.0) / 1_000_000.0
     assert not ts.is_client()
     assert ts.is_server()
 

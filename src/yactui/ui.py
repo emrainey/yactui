@@ -22,12 +22,12 @@ from textual.validation import Function, Number, ValidationResult, Validator
 from textual.containers import Vertical, Horizontal
 
 # from textual.reactive import Reactive
-from .node import CyphalNode
+from yactui.node import CyphalNode
 
-from .data import Health, Mode, Node, Status, Command
+from yactui.data import Health, Mode, Node, Status, Command
 
 
-class CyphalTUI(App):
+class CyphalTUI(App[int]):
     """
     A Textual TUI application for Cyphal network management.
     The Network Tree Displays known nodes on the network based on received heartbeats per each transport.
@@ -41,7 +41,7 @@ class CyphalTUI(App):
 
     """
 
-    node_tree: Tree
+    node_tree: Tree[str]
     cyphal_nodes: List[CyphalNode]
     udp_nodes: Any
     can_nodes: Any
@@ -50,9 +50,11 @@ class CyphalTUI(App):
     node_id: int
     selected_node: Optional[int]  # Uses the Node ID of the selected node in the tree
     verbose: bool = False
+    _running: bool
+    node_info: Dict[int, Dict[str, Any]]
 
     CSS_PATH = "yactui.tcss"
-    BINDINGS = [("q", "quit", "Quit the application")]
+    BINDINGS = [("Ctrl+Q", "quit", "Quit the application")]
 
     def __init__(self, nodes: List[CyphalNode], verbose: bool = False, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -60,6 +62,8 @@ class CyphalTUI(App):
         self.node_id = 0
         self.selected_node = None
         self.verbose = verbose
+        self._running = True
+        self.node_info = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -94,8 +98,8 @@ class CyphalTUI(App):
                         valid_empty=True,
                     )
                 with Vertical(id="cmd-send-area"):
-                    yield Label(" ")
-                    yield Button(label="Send", id="btn-send", variant="success")
+                    yield Label(" ")  # spacer
+                    yield Button(label="SEND", id="btn-send", variant="success")
                 with Vertical(id="time-switch-area"):
                     yield Label("TimeSync:")
                     yield Switch(id="time-switch", value=True)
@@ -237,7 +241,7 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
         cmd_node_input = self.query_one("#cmd-node", Input)
         cmd_input = self.query_one("#cmd", Input)
         cmd_args_input = self.query_one("#cmd-args", Input)
-        self.node_id = int(cmd_node_input.value)
+        self.node_id = int(cmd_node_input.value or 0)
         cmd = cmd_input.value.strip()
         try:
             self.command = int(cmd)
@@ -281,15 +285,13 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
 
     def action_quit(self) -> None:
         """Action to quit the application."""
-        for node in self.cyphal_nodes:
-            node.close()
-        self.exit()
+        self._running = False
 
     async def main(self) -> None:
         """Main processing loop for the Cyphal TUI application. Each node provides a receive event which is used to trigger display updates."""
         UPDATE_PERIOD = 0.5  # seconds
         next_update_at = asyncio.get_running_loop().time()
-        while True:
+        while self._running:
             # display update
             self.refresh_display()
             # let some time pass
@@ -301,3 +303,6 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
             for node in self.cyphal_nodes:
                 if node.receive_event.is_set():
                     node.receive_event.clear()
+        for node in self.cyphal_nodes:
+            node.close()
+        self.exit(0)
