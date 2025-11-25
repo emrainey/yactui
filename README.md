@@ -4,6 +4,30 @@ A `textual` based TUI for monitoring Cyphal networks.
 
 ![View of yacui in the command line](docs/yactui.png)
 
+## Features
+
+Supports:
+
+* uavcan.node.Heartbeat
+* uavcan.node.GetInfo
+* uavcan.node.port.List
+* uavcan.diagnostic.Record
+* uavcan.node.ExecuteCommand
+* uavcan.time.Synchronization
+* uavcan.node.GetTransportStatistics (UNTESTED)
+* FileServer (uses `pycyphal` implementation)
+  * uavcan.file.Read
+  * uavcan.file.List
+  * uavcan.file.Write
+  * uavcan.file.GetInfo
+  * uavcan.file.Modify
+
+Future Support:
+
+* uavcan.time.GetSynchronizationMasterInfo
+* uavcan.register.List
+* uavcan.register.Access
+
 ## Usage
 
 ### Environment
@@ -77,11 +101,10 @@ PYTHONPATH=${CYPHAL_PATH} textual run --dev src/yactui/cli.py --node-id 97
 
 # In another window
 source .venv/bin/activate
+# The exemplar uses all the right message definitions to exercise the TUI
 PYTHONPATH=${CYPHAL_PATH} yactui --node-id 98 --exemplar
 ```
 
 ## TODO
 
-* Test CAN interfaces
-* Test Serial interfaces (if they exist)
-* Test 2 or more interface together
+* See [Issues](https://github.com/emrainey/yactui/issues)
