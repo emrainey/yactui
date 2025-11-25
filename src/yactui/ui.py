@@ -4,7 +4,7 @@ from logging import info
 import textual
 import asyncio
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Coroutine, Dict, List, Optional, Tuple
 from textual.app import App, ComposeResult
 from textual.widgets import (
     Header,

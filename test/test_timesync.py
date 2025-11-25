@@ -20,7 +20,7 @@ class JumpClock(MonotonicClock):
         return self.current_time_microseconds
 
 
-def receive_time_sync(ts: TimeSyncer, basis_seconds: float, count: int, jusmper: JumpClock) -> None:
+def receive_time_sync(ts: TimeSyncer, basis_seconds: float, count: int, jumper: JumpClock) -> None:
     basis_microseconds = int(basis_seconds * 1_000_000)
     for i in range(count):
         jumper.jump(1_000_000)
@@ -34,7 +34,7 @@ def receive_time_sync(ts: TimeSyncer, basis_seconds: float, count: int, jusmper:
 
 def check_time_with_jumps(ts: TimeSyncer, jumper: JumpClock, jumps: List[int]):
     # the sum of the jumps can't exceed the timeout for the client to remain a client
-    assert sum(jumps) < ts.TIMEOUT
+    assert sum(jumps) < ts.TIMEOUT_MICROSECONDS
 
     old_time = ts.get_current_time_microseconds()
     for jump in jumps:

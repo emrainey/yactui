@@ -31,6 +31,7 @@ SynchronizationMaster = uavcan.time.GetSynchronizationMasterInfo_0_1
 ExecuteCommand = uavcan.node.ExecuteCommand_1_3
 PortList = uavcan.node.port.List_1_0
 Version = uavcan.node.Version_1_0
+SubjectList = uavcan.node.port.SubjectIDList_1_0
 # Mode = uavcan.node.Mode_1
 # Health = uavcan.node.Health_1
 TransportStatistics = uavcan.node.GetTransportStatistics_0_1
@@ -143,22 +144,22 @@ class CyphalNode(MonotonicClock):
             text=message,
         )
 
-    async def info(self, message: str):
+    async def info(self, message: str) -> None:
         """Log an info message to the Cyphal network"""
         msg = self.diagnostic(Severity.INFO, message)
         await self.publishers["diagnostic"].publish(msg)
 
-    async def debug(self, message: str):
+    async def debug(self, message: str) -> None:
         """Log a debug message to the Cyphal network"""
         msg = self.diagnostic(Severity.DEBUG, message)
         await self.publishers["diagnostic"].publish(msg)
 
-    async def warning(self, message: str):
+    async def warning(self, message: str) -> None:
         """Log a warning message to the Cyphal network"""
         msg = self.diagnostic(Severity.WARNING, message)
         await self.publishers["diagnostic"].publish(msg)
 
-    async def error(self, message: str):
+    async def error(self, message: str) -> None:
         """Log an error message to the Cyphal network"""
         msg = self.diagnostic(Severity.ERROR, message)
         await self.publishers["diagnostic"].publish(msg)
@@ -166,7 +167,7 @@ class CyphalNode(MonotonicClock):
     async def start(self) -> None:
         await asyncio.create_task(self.run())
 
-    def subjectlist_to_list(self, subject_list: uavcan.node.port.SubjectList_1_0) -> List[int]:
+    def subjectlist_to_list(self, subject_list: SubjectList) -> List[int]:
         # if subject_list.total is None:
         #     return []
         if subject_list.mask is not None:
@@ -249,8 +250,8 @@ class CyphalNode(MonotonicClock):
             if txfr.source_node_id not in self.known_nodes.keys():
                 self.known_nodes[txfr.source_node_id] = make_cyphal_node(
                     txfr.source_node_id,
-                    msg.health.value,
-                    msg.mode.value,
+                    Health(msg.health.value),
+                    Mode(msg.mode.value),
                     msg.uptime,
                     msg.vendor_specific_status_code,
                 )

@@ -81,11 +81,13 @@ class ExemplarNode(MonotonicClock):
             software_version=Version(0, 2),
             software_vcs_revision_id=1234,
             hardware_version=Version(15, 7),
+            software_image_crc=0xDEADBEEF,
         )
         self.time_sync = TimeSyncer(clock=self, client_not_server=False, time_basis_seconds=42.0)
         self.node = make_node(info=self.node_info, transport=self.transport)
-        self.node.heartbeat_publisher.mode = uavcan.node.Mode_1_0.OPERATIONAL
-        self.node.heartbeat_publisher.health = uavcan.node.Health_1_0.NOMINAL
+        self.node.heartbeat_publisher.mode = uavcan.node.Mode_1_0.MAINTENANCE
+        self.node.heartbeat_publisher.health = uavcan.node.Health_1_0.ADVISORY
+        self.node.heartbeat_publisher.vendor_specific_status_code = 42
         self.last_time_microseconds = self.time_sync.get_current_time_microseconds()
         self.subscribers = {
             "time": self.node.make_subscriber(TimeSynchronization),
