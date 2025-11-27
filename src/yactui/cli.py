@@ -96,7 +96,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return
         else:
             node = CyphalNode(node_id=args.node_id, ip=args.ip, file_server_folders=args.file_server_folder)
-            app = CyphalTUI(nodes=[node])
+            app = CyphalTUI(nodes=[node], verbose=(args.verbose > 1))
             try:
                 # asyncio.run(app.run_async())
                 await asyncio.gather(node.start(), app.run_async())

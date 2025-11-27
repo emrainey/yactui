@@ -16,12 +16,31 @@ Screen {
     background: $primary;
 }
 #node-tree {
-    height: 100%;
+    height: 80%;
 }
-#info-viewer {
-    height: 60%;
+#time-area {
+    height: 7;
+    width: 100%;
     border: solid $accent;
     background: $secondary;
+}
+#time-switch-area {
+    width: 10;
+}
+#time-numbers-area {
+    width: 80%;
+}
+#timestamp {
+    height: 6;
+    width: 100%;
+    border: none;
+}
+#data-tabs {
+    height: 50%;
+    border: solid $accent;
+    background: $secondary;
+}
+#info-viewer {
 }
 #command-bar {
     height: 4;
@@ -69,7 +88,7 @@ Screen {
     background: $secondary;
 }
 #log-viewer {
-    height: 30%;
+    height: 40%;
     border: solid $accent;
     background: $secondary;
 }

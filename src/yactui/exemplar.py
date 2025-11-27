@@ -1,4 +1,5 @@
 from importlib.metadata import metadata
+import random
 import time
 import asyncio
 import logging
@@ -84,7 +85,10 @@ class ExemplarNode(MonotonicClock):
             software_image_crc=0xDEADBEEF,
         )
         self.time_sync = TimeSyncer(clock=self, client_not_server=False, time_basis_seconds=42.0)
-        self.node = make_node(info=self.node_info, transport=self.transport)
+        self.node = make_node(
+            info=self.node_info,
+            transport=self.transport,
+        )
         self.node.heartbeat_publisher.mode = uavcan.node.Mode_1_0.MAINTENANCE
         self.node.heartbeat_publisher.health = uavcan.node.Health_1_0.ADVISORY
         self.node.heartbeat_publisher.vendor_specific_status_code = 42
@@ -103,6 +107,19 @@ class ExemplarNode(MonotonicClock):
         }
         self.servers["cmd"].serve_in_background(self.on_command_request)
         self.running = True
+        self.node.registry.setdefault(
+            "exemplar.random.vec4",
+            lambda: [
+                random.uniform(0.0, 1.0),
+                random.uniform(0.0, 1.0),
+                random.uniform(0.0, 1.0),
+                random.uniform(0.0, 1.0),
+            ],
+        )
+        self.node.registry.setdefault("exemplar.good-time.call", [8, 6, 7, 5, 3, 0, 9])  # mutable
+        self.node.registry.setdefault("exemplar.status.code", lambda: int(42))  # not mutable
+        self.node.registry["uavcan.node.description"] = "An exemplar node for testing YACTUI."
+        self.node.registry.setdefault("exemplar.errno", -9)  # mutable?
         self.node.start()
 
     def get_time_microseconds(self) -> int:

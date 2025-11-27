@@ -5,6 +5,7 @@ import textual
 import asyncio
 
 from typing import Any, Coroutine, Dict, List, Optional, Tuple
+from textual import on
 from textual.app import App, ComposeResult
 from textual.widgets import (
     Header,
@@ -16,6 +17,10 @@ from textual.widgets import (
     Label,
     Button,
     Switch,
+    DataTable,
+    Digits,
+    TabPane,
+    TabbedContent,
     # UnknownNodeID,
 )
 from textual.validation import Function, Number, ValidationResult, Validator
@@ -51,18 +56,22 @@ class CyphalTUI(App[int]):
     selected_node: Optional[int]  # Uses the Node ID of the selected node in the tree
     verbose: bool = False
     _running: bool
+    _freeze: bool
+    selected_register_row: Optional[int]
     node_info: Dict[int, Dict[str, Any]]
 
     CSS_PATH = "yactui.tcss"
-    BINDINGS = [("Ctrl+Q", "quit", "Quit the application")]
+    BINDINGS = [("Ctrl+Q", "quit", "Quit the application"), ("F", "freeze", "Freeze/Unfreeze the display")]
 
     def __init__(self, nodes: List[CyphalNode], verbose: bool = False, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.cyphal_nodes = nodes
         self.node_id = 0
         self.selected_node = None
+        self.selected_register_row = None
         self.verbose = verbose
         self._running = True
+        self._freeze = False
         self.node_info = {}
 
     def compose(self) -> ComposeResult:
@@ -71,8 +80,19 @@ class CyphalTUI(App[int]):
             self.node_tree = Tree(id="node-tree", label="Networks")
             self.node_tree.root.expand()
             yield self.node_tree
+            with Horizontal(id="time-area"):
+                with Vertical(id="time-switch-area"):
+                    yield Label("Sync:")
+                    yield Switch(id="time-switch", value=True)
+                with Vertical(id="time-numbers-area"):
+                    yield Label("Time (µs):")
+                    yield Digits(id="timestamp")
         with Vertical(id="right-pane"):  # Container for info and log viewers
-            yield Static(id="info-viewer")
+            with TabbedContent(id="data-tabs", initial="GetInfoView"):
+                with TabPane("GetInfo", id="GetInfoView"):
+                    yield Static(id="info-viewer")
+                with TabPane("Registry", id="RegistryView"):
+                    yield DataTable(id="register-viewer", zebra_stripes=True)
             with Horizontal(id="command-bar"):
                 with Vertical(id="cmd-node-area"):
                     yield Label("Node ID:")
@@ -100,9 +120,6 @@ class CyphalTUI(App[int]):
                 with Vertical(id="cmd-send-area"):
                     yield Label(" ")  # spacer
                     yield Button(label="SEND", id="btn-send", variant="success")
-                with Vertical(id="time-switch-area"):
-                    yield Label("TimeSync:")
-                    yield Switch(id="time-switch", value=True)
             yield RichLog(id="log-viewer")
         yield Footer()
 
@@ -116,12 +133,17 @@ class CyphalTUI(App[int]):
         # add a branch for Cyphal/Serial
         self.serial_nodes = self.node_tree.root.add("Cyphal/Serial", expand=True)
 
+        register_viewer = self.query_one("#register-viewer", DataTable)
+        register_viewer.add_columns("Name", "Value", "Type", "Default", "Minimum", "Maximum", "Mutable", "Persistent")
+
         info_viewer = self.query_one("#info-viewer", Static)
         # Set initial content for info and log viewers
         info_viewer.update("<== Select a node to see details here.")
         log_viewer = self.query_one("#log-viewer", RichLog)
         log_viewer.clear()
         log_viewer.write("Subscribed to uavcan.diagnostic.Record...")
+        digits = self.query_one("#timestamp", Digits)
+        digits.update("0")
         asyncio.create_task(self.main())
 
     def heartbeat_to_string(self, node: Node) -> str:
@@ -145,6 +167,9 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
     def refresh_display(self) -> None:
         """Refresh the TUI display."""
         # Update the node tree with current heartbeats
+        digits = self.query_one("#timestamp", Digits)
+        digits.update(str(self.cyphal_nodes[0].time_sync.get_current_time_microseconds()))
+
         self.udp_nodes.remove_children()
         self.can_nodes.remove_children()
         self.serial_nodes.remove_children()
@@ -172,19 +197,32 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
         if self.selected_node is not None:
             # Update info viewer for selected Tree node
             info_viewer = self.query_one("#info-viewer", Static)
-            # convert the label to a Cyphal node ID (different)
-            try:
-                node = self.node_tree.get_node_by_id(self.selected_node)
-                label = node.label()
-                self.node_id = self.get_node_id_from_label(label) or 0
-            except Exception as e:
-                label = ""
-                self.node_id = 0
             if self.node_id > 0:
                 for cyphal_node in self.cyphal_nodes:
                     if self.node_id in cyphal_node.known_nodes.keys():
                         info_viewer.update(self.node_to_string(cyphal_node.known_nodes[self.node_id]))
                         break
+
+        register_viewer = self.query_one("#register-viewer", DataTable)
+        register_viewer.clear()
+        for cyphal_node in self.cyphal_nodes:
+            for node_id, node in cyphal_node.known_nodes.items():
+                if node_id == self.node_id:
+                    for register in node.registry:
+                        register_viewer.add_row(
+                            register.name,
+                            str(register.value),
+                            register.type,
+                            "",  # Default
+                            "",  # Minimum
+                            "",  # Maximum
+                            "Y" if register.mutable else "N",
+                            "Y" if register.persistent else "N",
+                        )
+                    if self.selected_register_row is not None:
+                        register_viewer.move_cursor(
+                            row=self.selected_register_row, column=0, animate=False, scroll=True
+                        )
 
         log_viewer = self.query_one("#log-viewer", RichLog)
         # do not clear the log! just append new entries
@@ -209,6 +247,25 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
             except ValueError:
                 return None
         return None
+
+    # def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
+    #     """Handle register row highlight to possibly edit the value."""
+    #     log_viewer = self.query_one("#log-viewer", RichLog)
+    #     self.selected_register_row = event.coordinate.row
+    #     if self.verbose:
+    #         log_viewer.write(
+    #             f"Highlighted register row: {self.selected_register_row} for Node ID: {self.node_id} @{event.coordinate.row}x{event.coordinate.column}"
+    #         )
+
+    def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+        """Handle register row selection to possibly edit the value."""
+        log_viewer = self.query_one("#log-viewer", RichLog)
+        self.selected_register_row = event.coordinate.row
+        if self.verbose:
+            log_viewer.write(
+                f"Selected register row: {self.selected_register_row} for Node ID: {self.node_id} @{event.coordinate.row}x{event.coordinate.column}"
+            )
+        # TODO bring up a dialog to edit the register value if mutable.
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle Submitted Command Input"""
@@ -275,6 +332,7 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
         if self.verbose:
             log_viewer.write(f"Selected node: {label}:{self.selected_node}")
         self.node_id = self.get_node_id_from_label(label) or 0
+        log_viewer.write(f"Selected Node ID: {self.node_id}")
         # update the cmd node input box
         cmd_node_input = self.query_one("#cmd-node", Input)
         cmd_node_input.value = str(self.node_id)
@@ -283,17 +341,37 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
                 info_viewer.update(self.node_to_string(node.known_nodes[self.node_id]))
                 break
 
+    @on(TabbedContent.TabActivated, "#data-tabs")
+    def on_data_tabs_activated(self, event: TabbedContent.TabActivated) -> None:
+        """Handle tab activation to refresh display."""
+        if self.verbose:
+            log_viewer = self.query_one("#log-viewer", RichLog)
+            log_viewer.write(f"Activated tab: {event.tab.id}, looking for Node ID: {self.node_id}")
+        if "RegistryView" in event.tab.id:
+            # start the register listing of the selected node
+            for node in self.cyphal_nodes:
+                if self.node_id in node.known_nodes.keys():
+                    asyncio.create_task(node.request_register_list(self.node_id))
+                    break
+
     def action_quit(self) -> None:
         """Action to quit the application."""
         self._running = False
+
+    def action_freeze(self) -> None:
+        """Action to freeze/unfreeze the display updates."""
+        self._freeze = not self._freeze
+        log_viewer = self.query_one("#log-viewer", RichLog)
+        log_viewer.write(f"Display {'frozen' if self._freeze else 'unfrozen'}.")
 
     async def main(self) -> None:
         """Main processing loop for the Cyphal TUI application. Each node provides a receive event which is used to trigger display updates."""
         UPDATE_PERIOD = 0.5  # seconds
         next_update_at = asyncio.get_running_loop().time()
         while self._running:
-            # display update
-            self.refresh_display()
+            if not self._freeze:
+                # display update
+                self.refresh_display()
             # let some time pass
             next_update_at += UPDATE_PERIOD
             await asyncio.gather(

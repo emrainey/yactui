@@ -1,7 +1,7 @@
 import time
 import asyncio
-import logging
 import collections
+import traceback
 import pycyphal  # Importing PyCyphal will automatically install the import hook for DSDL compilation.
 
 import pycyphal.application  # This module requires the root namespace "uavcan" to be transcompiled.
@@ -35,6 +35,11 @@ SubjectList = uavcan.node.port.SubjectIDList_1_0
 # Mode = uavcan.node.Mode_1
 # Health = uavcan.node.Health_1
 TransportStatistics = uavcan.node.GetTransportStatistics_0_1
+RegisterList = uavcan.register.List_1_0
+RegisterAccess = uavcan.register.Access_1_0
+Name = uavcan.register.Name_1_0
+Value = uavcan.register.Value_1_0
+Empty = uavcan.primitive.Empty_1_0
 
 # Dataclasses for Cyphal Node
 from yactui.data import (
@@ -49,6 +54,7 @@ from yactui.data import (
     Log,
     make_log,
     make_result,
+    make_register,
 )
 
 UPDATE_PERIOD = 1.0  # seconds
@@ -140,9 +146,103 @@ class CyphalNode(MonotonicClock):
         """Log a message to the Cyphal transport which we use"""
         return Record(
             timestamp=TimeStamp(microsecond=int(time.monotonic() * 1_000_000)),
-            severity=uavcan.diagnostic.Severity_1_0(int(level)),
-            text=message,
+            severity=uavcan.diagnostic.Severity_1_0(level.value),
+            text=message.encode("utf-8", errors="ignore"),
         )
+
+    async def request_register_list(self, node_id: int) -> None:
+        """
+        First, this will query the RegisterList from 0 until it returns an empty value. This will fix the number of registers.
+        Then it will "Access" each register to get its value and metadata and populate the node's registry.
+        Request the register list from a node
+        """
+        end_of_list = False
+        index: int = 0
+        await self.info(f"Requesting Register List from Node ID {node_id}")
+        if node_id not in self.known_nodes:
+            return  # unknown node
+        node: Node = self.known_nodes[node_id]
+        if len(node.registry) == 0:
+            while not end_of_list:
+                client = self.node.make_client(RegisterList, server_node_id=node_id)
+                try:
+                    response = await client.call(RegisterList.Request(index=index))
+                    if response is None:
+                        # timeout
+                        break
+                    msg, metadata = response
+                    assert isinstance(msg, RegisterList.Response)
+                    name = msg.name.name.tobytes().decode("utf-8", errors="ignore")
+                    if name != "":
+                        node.registry.append(make_register(index, name))
+                        index += 1
+                        await self.info(f"Register List for Node ID {node_id}: {msg}")
+                    else:
+                        end_of_list = True
+                finally:
+                    client.close()
+        # Now we have the list of registers, get their values
+        for register in node.registry:
+            client = self.node.make_client(RegisterAccess, server_node_id=node_id)
+            try:
+                response = await client.call(
+                    RegisterAccess.Request(name=Name(register.name.encode("utf-8")), value=Value())
+                )
+                if response is None:
+                    # timeout
+                    continue
+                msg, metadata = response
+                assert isinstance(msg, RegisterAccess.Response)
+                if msg.value.empty is not None:
+                    register.value = None
+                    register.type = "Empty"
+                elif msg.value.string is not None:
+                    register.value = msg.value.string.value.tobytes().decode("utf-8", errors="ignore")
+                    register.type = "String"
+                elif msg.value.unstructured is not None:
+                    # convert to a hex string
+                    register.value = msg.value.unstructured.value.tobytes().hex()
+                    register.type = "Unstructured"
+                elif msg.value.bit is not None:
+                    register.value = msg.value.bit.value
+                    register.type = "Bit"
+                elif msg.value.integer8 is not None:
+                    register.value = msg.value.integer8.value
+                    register.type = "Integer8"
+                elif msg.value.integer16 is not None:
+                    register.value = msg.value.integer16.value
+                    register.type = "Integer16"
+                elif msg.value.integer32 is not None:
+                    register.value = msg.value.integer32.value
+                    register.type = "Integer32"
+                elif msg.value.integer64 is not None:
+                    register.value = msg.value.integer64.value
+                    register.type = "Integer64"
+                elif msg.value.natural8 is not None:
+                    register.value = msg.value.natural8.value
+                    register.type = "Natural8"
+                elif msg.value.natural16 is not None:
+                    register.value = msg.value.natural16.value
+                    register.type = "Natural16"
+                elif msg.value.natural32 is not None:
+                    register.value = msg.value.natural32.value
+                    register.type = "Natural32"
+                elif msg.value.natural64 is not None:
+                    register.value = msg.value.natural64.value
+                    register.type = "Natural64"
+                elif msg.value.real32 is not None:
+                    register.value = msg.value.real32.value
+                    register.type = "Real32"
+                elif msg.value.real64 is not None:
+                    register.value = msg.value.real64.value
+                    register.type = "Real64"
+                else:
+                    register.value = None
+                    register.type = "???"
+                register.mutable = msg.mutable
+                register.persistent = msg.persistent
+            finally:
+                client.close()
 
     async def info(self, message: str) -> None:
         """Log an info message to the Cyphal network"""
@@ -168,8 +268,7 @@ class CyphalNode(MonotonicClock):
         await asyncio.create_task(self.run())
 
     def subjectlist_to_list(self, subject_list: SubjectList) -> List[int]:
-        # if subject_list.total is None:
-        #     return []
+        """Convert a SubjectList to a list of Subject ID integers"""
         if subject_list.mask is not None:
             return self.mask_to_list(subject_list.mask)
         elif subject_list.sparse_list is not None:  # sparse list

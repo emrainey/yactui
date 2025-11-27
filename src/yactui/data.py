@@ -1,6 +1,7 @@
 import enum
+import collections
 from dataclasses import dataclass
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any, Union
 
 # We re-define these here to avoid a dependency on pycyphal in data.py
 # although this is somewhat redundant with node.py and the pycyphal definitions.
@@ -69,6 +70,32 @@ class Status(enum.IntEnum):
 
 
 @dataclass
+class Register:
+    index: int
+    name: str
+    value: Union[None, int, float, str, bool, List[int], List[float], List[str], List[bool]]
+    type: str
+    count: int
+    mutable: bool
+    persistent: bool
+
+
+def make_register(
+    index: int = 0,
+    name: str = "",
+) -> Register:
+    return Register(
+        index=index,
+        name=name,
+        value=None,
+        type="Empty",
+        count=0,
+        mutable=False,
+        persistent=False,
+    )
+
+
+@dataclass
 class Node:
     node_id: int
     name: Optional[str]
@@ -86,6 +113,7 @@ class Node:
     subscribers: List[int]  # List of Subject IDs
     clients: List[int]  # List of Service IDs
     servers: List[int]  # List of Service IDs
+    registry: collections.deque[Register]
     number_emitted: int = 0
     number_received: int = 0
     number_error: int = 0
@@ -115,6 +143,7 @@ def make_cyphal_node(
         subscribers=[],
         clients=[],
         servers=[],
+        registry=collections.deque(),
     )
 
 
