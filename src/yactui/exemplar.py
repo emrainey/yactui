@@ -1,5 +1,6 @@
 from importlib.metadata import metadata
 import random
+import statistics
 import time
 import asyncio
 import logging
@@ -27,6 +28,8 @@ Record = uavcan.diagnostic.Record_1_1
 ExecuteCommand = uavcan.node.ExecuteCommand_1_3
 # Mode = uavcan.node.Mode_1
 # Health = uavcan.node.Health_1
+TransportStatistics = uavcan.node.GetTransportStatistics_0_1
+IOStatistics = uavcan.node.IOStatistics_0_1
 
 from typing import Any, Dict, List, Optional, Union
 from pycyphal.application import make_node, NodeInfo, register
@@ -45,7 +48,7 @@ from yactui.data import (
     make_log,
     make_result,
 )
-from yactui import TimeSyncer, MonotonicClock, make_transport
+from yactui import TimeSyncer, MonotonicClock, make_transport, NodeStatistics
 
 UPDATE_PERIOD = 1.0  # seconds
 MTU_GUESS = 1500 - 20 - 8 - 24  # Default MTU for Cyphal/UDP
@@ -67,6 +70,7 @@ class ExemplarNode(MonotonicClock):
     transport: pycyphal.transport.Transport
     time_sync: TimeSyncer
     last_time_microseconds: int
+    statistics: NodeStatistics
 
     def __init__(
         self,
@@ -84,6 +88,7 @@ class ExemplarNode(MonotonicClock):
             hardware_version=Version(15, 7),
             software_image_crc=0xDEADBEEF,
         )
+        self.statistics = NodeStatistics(0, 0, 0)
         self.time_sync = TimeSyncer(clock=self, client_not_server=False, time_basis_seconds=42.0)
         self.node = make_node(
             info=self.node_info,
@@ -104,8 +109,10 @@ class ExemplarNode(MonotonicClock):
         self.servers = {
             "time": self.node.get_server(SynchronizationMaster),
             "cmd": self.node.get_server(ExecuteCommand),
+            "transport_stats": self.node.get_server(TransportStatistics),
         }
         self.servers["cmd"].serve_in_background(self.on_command_request)
+        self.servers["transport_stats"].serve_in_background(self.on_transport_statistics)
         self.running = True
         self.node.registry.setdefault(
             "exemplar.random.vec4",
@@ -168,6 +175,20 @@ class ExemplarNode(MonotonicClock):
         await self.info(f"Received command {request.command} from node {metadata.client_node_id}")
         return ExecuteCommand.Response(ExecuteCommand.Response.STATUS_BAD_COMMAND)
 
+    async def on_transport_statistics(
+        self, request: TransportStatistics.Request, metadata: pycyphal.presentation.ServiceRequestMetadata
+    ) -> TransportStatistics.Response:
+        await self.debug(f"Transport stats: ")
+        stats = IOStatistics(
+            num_emitted=self.statistics.number_emitted,
+            num_received=self.statistics.number_received,
+            num_errored=self.statistics.number_error,
+        )
+        return TransportStatistics.Response(
+            transfer_statistics=stats,
+            network_interface_statistics=[stats],
+        )
+
     async def start(self) -> None:
         await asyncio.create_task(self.run())
 
@@ -197,6 +218,19 @@ class ExemplarNode(MonotonicClock):
             await self.warning("Warning message from Exemplar Node.")
             await self.error("Error message from Exemplar Node.")
             await self.publishers["time"].publish(self.get_time_message())
+
+            # fetch the transport statistics and accumulate them into the local tally
+            self.statistics.number_emitted = 0
+            self.statistics.number_received = 0
+            self.statistics.number_error = 0
+            for session in self.transport.output_sessions:
+                stats = session.sample_statistics()
+                self.statistics.number_emitted += stats.frames
+                self.statistics.number_error += stats.errors
+            for session in self.transport.input_sessions:
+                stats = session.sample_statistics()
+                self.statistics.number_received += stats.frames
+                self.statistics.number_error += stats.errors
 
             await asyncio.sleep(next_update_at - asyncio.get_running_loop().time())
             next_update_at += UPDATE_PERIOD

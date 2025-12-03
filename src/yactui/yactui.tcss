@@ -92,3 +92,19 @@ Screen {
     border: solid $accent;
     background: $secondary;
 }
+ValueEditScreen {
+    align: center middle;
+}
+#edit-pane {
+    width: 60;
+    height: 13;
+    border: thick $background 80%;
+    background: $surface;
+    content-align: center middle;
+}
+#edit-button-area {
+    width: 100%;
+    height: 100%;
+    padding: 0 1;
+    margin: 1;
+}

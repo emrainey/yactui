@@ -115,8 +115,11 @@ class Node:
     servers: List[int]  # List of Service IDs
     registry: collections.deque[Register]
     number_emitted: int = 0
+    delta_emitted: int = 0
     number_received: int = 0
+    delta_received: int = 0
     number_error: int = 0
+    delta_error: int = 0
 
 
 def make_cyphal_node(

@@ -25,11 +25,39 @@ from textual.widgets import (
 )
 from textual.validation import Function, Number, ValidationResult, Validator
 from textual.containers import Vertical, Horizontal
+from textual.screen import ModalScreen
+from textual.coordinate import Coordinate
 
 # from textual.reactive import Reactive
 from yactui.node import CyphalNode
 
-from yactui.data import Health, Mode, Node, Status, Command
+from yactui.data import Health, Mode, Node, Result, Status, Command
+
+
+class ValueEditScreen(ModalScreen[str]):
+    """A modal screen for editing a register value."""
+
+    BINDINGS = [("escape", "app.pop_screen", "Pop screen")]
+
+    def __init__(self, register_name: str = "") -> None:
+        super().__init__()
+        self.register_name = register_name
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="edit-pane"):
+            yield Static(f"Editing {self.register_name}", id="edit-register-name")
+            yield Input(placeholder="new value", id="edit-input")
+            with Horizontal(id="edit-button-area"):
+                yield Button(label="Submit", id="edit-submit", variant="success")
+                yield Button(label="Cancel", id="edit-cancel", variant="error")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses in the edit modal."""
+        if event.button.id == "edit-submit":
+            input_widget = self.query_one("#edit-input", Input)
+            self.dismiss(input_widget.value)
+        elif event.button.id == "edit-cancel":
+            self.dismiss(None)
 
 
 class CyphalTUI(App[int]):
@@ -161,7 +189,7 @@ Publishers: {node.publishers}
 Subscribers: {node.subscribers}
 Clients: {node.clients}
 Servers: {node.servers}
-TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
+TX: {node.number_emitted} dTX:{node.delta_emitted} RX: {node.number_received} dRX:{node.delta_received} ERR: {node.number_error} dERR:{node.delta_error}
 """
 
     def refresh_display(self) -> None:
@@ -232,11 +260,13 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
                 log_viewer.write(f"[{log.node_id}][{log.timestamp}] {log.level}: {log.message}")
 
             while len(cyphal_node.results) > 0:
-                result = cyphal_node.results.popleft()
+                result: Result = cyphal_node.results.popleft()
                 if result.status == Status.DID_NOT_SEND:
-                    log_viewer.write(f"[{result.server_node_id}] Command Result: DID NOT SEND")
+                    log_viewer.write(f"[{result.server_node_id}] Command Result: DID NOT SEND - {result.output}")
                 else:
-                    log_viewer.write(f"[{result.server_node_id}] Command Result: {result.status} - {result.output}")
+                    log_viewer.write(
+                        f"[{result.server_node_id}] Command Result: {result.status.name} - {result.output}"
+                    )
 
     def get_node_id_from_label(self, label: str) -> Optional[int]:
         """Extract the Node ID from a tree node label."""
@@ -260,12 +290,36 @@ TX: {node.number_emitted} RX: {node.number_received} ERR: {node.number_error}
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         """Handle register row selection to possibly edit the value."""
         log_viewer = self.query_one("#log-viewer", RichLog)
+        registry_view = self.query_one("#register-viewer", DataTable)
         self.selected_register_row = event.coordinate.row
         if self.verbose:
             log_viewer.write(
                 f"Selected register row: {self.selected_register_row} for Node ID: {self.node_id} @{event.coordinate.row}x{event.coordinate.column}"
             )
-        # TODO bring up a dialog to edit the register value if mutable.
+        register_name: str = registry_view.get_cell_at(Coordinate(event.coordinate.row, 0))
+        register_type: str = registry_view.get_cell_at(Coordinate(event.coordinate.row, 2))
+
+        def assign_register_value(value: Optional[str]) -> None:
+            if value is None and self.verbose:
+                log_viewer.write(">> Register edit cancelled.<<")
+                return
+            for cyphal_node in self.cyphal_nodes:
+                # send the new register value to the node to convert and set it via Cyphal
+                if self.node_id in cyphal_node.known_nodes.keys():
+                    if self.verbose:
+                        log_viewer.write(
+                            f"New value for register {self.node_id}:'{register_name}': {register_type} => {value}"
+                        )
+                    asyncio.create_task(
+                        cyphal_node.send_register_access(
+                            server_node_id=self.node_id,
+                            register_name=register_name,
+                            register_type=register_type,
+                            register_value=value,
+                        )
+                    )
+
+        self.push_screen(ValueEditScreen(register_name), assign_register_value)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle Submitted Command Input"""

@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Optional, Union
 import logging
 
@@ -9,6 +10,8 @@ import pycyphal.transport.serial
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+EXCEPTIONS_LOGFILE = "yactui-exceptions.log"
 
 
 class MonotonicClock(ABC):
@@ -175,3 +178,12 @@ def make_transport(ip: Optional[str], inf: Optional[str], mtu: int, node_id: int
     else:
         raise ValueError("Either ip or inf must be provided to create a transport")
     return transport_type, transport
+
+
+@dataclass
+class NodeStatistics:
+    """Holds the statistics for a Cyphal Node but without transport-specific details"""
+
+    number_emitted: int = 0
+    number_received: int = 0
+    number_error: int = 0

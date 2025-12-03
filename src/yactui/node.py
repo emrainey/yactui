@@ -1,3 +1,4 @@
+import ast
 import time
 import asyncio
 import collections
@@ -19,7 +20,7 @@ from typing import Any, Dict, List, Optional, Union
 from pycyphal.application import make_node, NodeInfo, register
 from pycyphal.application.file import FileServer
 
-from yactui import MonotonicClock, TimeSyncer, make_transport
+from yactui import MonotonicClock, NodeStatistics, TimeSyncer, make_transport, EXCEPTIONS_LOGFILE
 
 GetInfo = uavcan.node.GetInfo_1_0
 Heartbeat = uavcan.node.Heartbeat_1_0
@@ -46,6 +47,7 @@ from yactui.data import (
     Node,
     Mode,
     Health,
+    Register,
     Severity,
     Command,
     Status,
@@ -326,6 +328,129 @@ class CyphalNode(MonotonicClock):
                 respondent = server_node_id
             status = Status(msg.status)
             response_message = msg.output.tobytes().decode("utf-8", errors="ignore")
+        except Exception as e:
+            response_message = f"Error sending Command to Node ID {server_node_id}: {e}\n{traceback.format_exc()}"
+            with open(EXCEPTIONS_LOGFILE, "a") as f:
+                f.write(f"{response_message}\n")
+        finally:
+            client.close()
+            self.results.append(
+                make_result(
+                    status=status,
+                    output=response_message,
+                    server_node_id=respondent,
+                )
+            )
+        return True
+
+    async def send_register_access(
+        self, server_node_id: int, register_name: str, register_type: str, register_value: Any
+    ) -> bool:
+        status: Status = Status.DID_NOT_SEND
+        response_message: str = ""
+        respondent: int = server_node_id
+        node: Node = self.known_nodes[server_node_id]
+        if node.registry is None:
+            response_message = f"Node ID {server_node_id} has no registry loaded."
+            self.results.append(
+                make_result(
+                    status=Status.DID_NOT_SEND,
+                    output=response_message,
+                    server_node_id=respondent,
+                )
+            )
+            return False
+
+        found = False
+        for reg in node.registry:
+            if reg.name == register_name:
+                found = True
+                break
+        if not found:
+            response_message = f"Register {register_name} not found on Node ID {server_node_id}."
+            self.results.append(
+                make_result(
+                    status=Status.DID_NOT_SEND,
+                    output=response_message,
+                    server_node_id=respondent,
+                )
+            )
+            return False
+        entry: Register = [reg for reg in node.registry if reg.name == register_name][0]
+        client = self.node.make_client(RegisterAccess, server_node_id=server_node_id)
+        try:
+            if entry.type != "Empty":
+                converted_value = ast.literal_eval(register_value)  # Convert string to appropriate type
+            else:
+                converted_value = None
+
+            if entry.type == "Empty":
+                value = Value(empty=Empty())
+            elif entry.type == "String":
+                value = Value(string=uavcan.primitive.String_1_0(value=converted_value))
+            elif entry.type == "Bit":
+                value = Value(bit=uavcan.primitive.Boolean_1_0(value=converted_value))
+            elif entry.type == "Unstructured":
+                value = Value(unstructured=uavcan.primitive.Unstructured_1_0(value=bytes.fromhex(converted_value)))
+            elif entry.type == "Integer8":
+                value = Value(integer8=uavcan.primitive.array.Integer8_1_0(value=converted_value))
+            elif entry.type == "Integer16":
+                value = Value(integer16=uavcan.primitive.array.Integer16_1_0(value=converted_value))
+            elif entry.type == "Integer32":
+                value = Value(integer32=uavcan.primitive.array.Integer32_1_0(value=converted_value))
+            elif entry.type == "Integer64":
+                value = Value(integer64=uavcan.primitive.array.Integer64_1_0(value=converted_value))
+            elif entry.type == "Natural8":
+                value = Value(natural8=uavcan.primitive.array.Natural8_1_0(value=converted_value))
+            elif entry.type == "Natural16":
+                value = Value(natural16=uavcan.primitive.array.Natural16_1_0(value=converted_value))
+            elif entry.type == "Natural32":
+                value = Value(natural32=uavcan.primitivearray.Natural32_1_0(value=converted_value))
+            elif entry.type == "Natural64":
+                value = Value(natural64=uavcan.primitive.array.Natural64_1_0(value=converted_value))
+            elif entry.type == "Real16":
+                value = Value(real16=uavcan.primitive.array.Real16_1_0(value=converted_value))
+            elif entry.type == "Real32":
+                value = Value(real32=uavcan.primitive.array.Real32_1_0(value=converted_value))
+            elif entry.type == "Real64":
+                value = Value(real64=uavcan.primitive.array.Real64_1_0(value=converted_value))
+            else:
+                response_message = (
+                    f"Register {register_name} on Node ID {server_node_id} has unknown type {entry.type}."
+                )
+                self.results.append(
+                    make_result(
+                        status=Status.DID_NOT_SEND,
+                        output=response_message,
+                        server_node_id=respondent,
+                    )
+                )
+            request = RegisterAccess.Request(name=uavcan.register.Name_1_0(register_name), value=value)
+            response = await client.call(request)
+            if response is None:
+                # timeout
+                status = Status.TIMEOUT
+                response_message = f"Command {command} to Node ID {server_node_id} timed out."
+                return False  # the finally will still log the status
+            msg, metadata = response
+            assert isinstance(msg, RegisterAccess.Response)
+            if metadata.source_node_id is not None:
+                respondent = metadata.source_node_id
+            else:
+                respondent = server_node_id
+            if msg.value == value:
+                status = Status.SUCCESS
+                response_message = "Register access successful."
+            else:
+                status = Status.FAILURE
+                response_message = "Register access failed: returned value does not match sent value."
+
+        except Exception as e:
+            response_message = (
+                f"Error sending RegisterAccess to Node ID {server_node_id}: {e}\n{traceback.format_exc()}"
+            )
+            with open(EXCEPTIONS_LOGFILE, "a") as f:
+                f.write(f"{response_message}\n")
         finally:
             client.close()
             self.results.append(
@@ -464,9 +589,18 @@ class CyphalNode(MonotonicClock):
                     self.receive_event.set()
                     msg, metadata = response
                     assert isinstance(msg, TransportStatistics.Response)
-                    self.known_nodes[node_id].number_emitted = msg.transfer_statistics.number_of_emitted_frames
-                    self.known_nodes[node_id].number_received = msg.transfer_statistics.number_of_received_frames
-                    self.known_nodes[node_id].number_error = msg.transfer_statistics.number_of_error_frames
+                    self.known_nodes[node_id].delta_emitted = (
+                        msg.transfer_statistics.num_emitted - self.known_nodes[node_id].number_emitted
+                    )
+                    self.known_nodes[node_id].delta_received = (
+                        msg.transfer_statistics.num_received - self.known_nodes[node_id].number_received
+                    )
+                    self.known_nodes[node_id].delta_error = (
+                        msg.transfer_statistics.num_errored - self.known_nodes[node_id].number_error
+                    )
+                    self.known_nodes[node_id].number_emitted = msg.transfer_statistics.num_emitted
+                    self.known_nodes[node_id].number_received = msg.transfer_statistics.num_received
+                    self.known_nodes[node_id].number_error = msg.transfer_statistics.num_errored
                 finally:
                     client.close()
             await asyncio.sleep(next_update_at - asyncio.get_running_loop().time())
