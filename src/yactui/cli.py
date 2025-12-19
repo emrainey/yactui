@@ -97,13 +97,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             node = CyphalNode(node_id=args.node_id, ip=args.ip, file_server_folders=args.file_server_folder)
             app = CyphalTUI(nodes=[node], verbose=(args.verbose > 1))
+            node_task = None
             try:
                 # asyncio.run(app.run_async())
-                await asyncio.gather(node.start(), app.run_async())
+                node_task = asyncio.create_task(node.start())
+                await asyncio.gather(node_task, app.run_async())
             except KeyboardInterrupt:
                 pass
             finally:
                 node.close()
+                # Cancel the node task and wait for it to complete gracefully
+                if node_task and not node_task.done():
+                    node_task.cancel()
+                    try:
+                        await node_task
+                    except asyncio.CancelledError:
+                        pass
 
     asyncio.run(run_apps())
     return 0

@@ -10,6 +10,7 @@ import pycyphal.application  # This module requires the root namespace "uavcan" 
 import pycyphal.transport.udp
 import pycyphal.transport.can
 import pycyphal.transport.serial
+from pycyphal.presentation._port._error import PortClosedError
 
 # Import DSDLs after pycyphal import hook is installed.
 import uavcan.node  # noqa
@@ -562,85 +563,99 @@ class CyphalNode(MonotonicClock):
 
         next_update_at = asyncio.get_running_loop().time() + UPDATE_PERIOD
 
-        while self.running:
+        try:
+            while self.running:
 
-            if self.time_sync_enabled:
-                await self.publishers["time"].publish(self.get_time_message())
+                if self.time_sync_enabled:
+                    await self.publishers["time"].publish(self.get_time_message())
 
-            # Create a snapshot of query_nodes to iterate safely
-            with self._lock:
-                query_snapshot = list(self.query_nodes)
-
-            for server_node_id in query_snapshot:
+                # Create a snapshot of query_nodes to iterate safely
                 with self._lock:
-                    if server_node_id not in self.known_nodes:
-                        continue
-                    if self.known_nodes[server_node_id].name is not None:
-                        continue  # Already have info
-                client = self.node.make_client(GetInfo, server_node_id=server_node_id)
-                try:
-                    response = await client.call(GetInfo.Request())
-                    if response is None:
-                        # timeout, try again later
-                        self.query_nodes.append(server_node_id)
-                        continue
-                    self.receive_event.set()
-                    # split the tuple up
-                    msg, metadata = response
-                    assert isinstance(msg, GetInfo.Response)
-                    print(
-                        "Got info for Node ID",
-                        metadata.source_node_id,
-                        " Response:",
-                        response,
-                    )
-                    with self._lock:
-                        self.known_nodes[server_node_id].name = msg.name.tobytes().decode("utf-8", errors="ignore")
-                        self.known_nodes[server_node_id].software_version = (
-                            msg.software_version.major,
-                            msg.software_version.minor,
-                        )
-                        self.known_nodes[server_node_id].hardware_version = (
-                            msg.hardware_version.major,
-                            msg.hardware_version.minor,
-                        )
-                        self.known_nodes[server_node_id].revision = msg.software_vcs_revision_id
-                        self.known_nodes[server_node_id].crc64we = msg.software_image_crc.flatten()
-                        self.known_nodes[server_node_id].unique_id = msg.unique_id.tobytes()
-                        self.known_nodes[server_node_id].certificate = msg.certificate_of_authenticity.tobytes()
-                finally:
-                    client.close()
-            # For each known Node ID, get transport statistics every period
-            with self._lock:
-                node_ids_snapshot = list(self.known_nodes.keys())
+                    query_snapshot = list(self.query_nodes)
 
-            for node_id in node_ids_snapshot:
-                client = self.node.make_client(TransportStatistics, server_node_id=node_id)
-                try:
-                    response = await client.call(TransportStatistics.Request())
-                    if response is None:
-                        # timeout
-                        continue
-                    self.receive_event.set()
-                    msg, metadata = response
-                    assert isinstance(msg, TransportStatistics.Response)
+                for server_node_id in query_snapshot:
+                    if not self.running:
+                        break
                     with self._lock:
-                        self.known_nodes[node_id].delta_emitted = (
-                            msg.transfer_statistics.num_emitted - self.known_nodes[node_id].number_emitted
+                        if server_node_id not in self.known_nodes:
+                            continue
+                        if self.known_nodes[server_node_id].name is not None:
+                            continue  # Already have info
+                    client = self.node.make_client(GetInfo, server_node_id=server_node_id)
+                    try:
+                        response = await client.call(GetInfo.Request())
+                        if response is None:
+                            # timeout, try again later
+                            self.query_nodes.append(server_node_id)
+                            continue
+                        self.receive_event.set()
+                        # split the tuple up
+                        msg, metadata = response
+                        assert isinstance(msg, GetInfo.Response)
+                        print(
+                            "Got info for Node ID",
+                            metadata.source_node_id,
+                            " Response:",
+                            response,
                         )
-                        self.known_nodes[node_id].delta_received = (
-                            msg.transfer_statistics.num_received - self.known_nodes[node_id].number_received
-                        )
-                        self.known_nodes[node_id].delta_error = (
-                            msg.transfer_statistics.num_errored - self.known_nodes[node_id].number_error
-                        )
-                        self.known_nodes[node_id].number_emitted = msg.transfer_statistics.num_emitted
-                        self.known_nodes[node_id].number_received = msg.transfer_statistics.num_received
-                        self.known_nodes[node_id].number_error = msg.transfer_statistics.num_errored
-                finally:
-                    client.close()
-            await asyncio.sleep(next_update_at - asyncio.get_running_loop().time())
-            next_update_at += UPDATE_PERIOD
+                        with self._lock:
+                            self.known_nodes[server_node_id].name = msg.name.tobytes().decode("utf-8", errors="ignore")
+                            self.known_nodes[server_node_id].software_version = (
+                                msg.software_version.major,
+                                msg.software_version.minor,
+                            )
+                            self.known_nodes[server_node_id].hardware_version = (
+                                msg.hardware_version.major,
+                                msg.hardware_version.minor,
+                            )
+                            self.known_nodes[server_node_id].revision = msg.software_vcs_revision_id
+                            self.known_nodes[server_node_id].crc64we = msg.software_image_crc.flatten()
+                            self.known_nodes[server_node_id].unique_id = msg.unique_id.tobytes()
+                            self.known_nodes[server_node_id].certificate = msg.certificate_of_authenticity.tobytes()
+                    except PortClosedError:
+                        # Port was closed during shutdown, exit gracefully
+                        break
+                    finally:
+                        client.close()
+                # For each known Node ID, get transport statistics every period
+                with self._lock:
+                    node_ids_snapshot = list(self.known_nodes.keys())
+
+                for node_id in node_ids_snapshot:
+                    if not self.running:
+                        break
+                    client = self.node.make_client(TransportStatistics, server_node_id=node_id)
+                    try:
+                        response = await client.call(TransportStatistics.Request())
+                        if response is None:
+                            # timeout
+                            continue
+                        self.receive_event.set()
+                        msg, metadata = response
+                        assert isinstance(msg, TransportStatistics.Response)
+                        with self._lock:
+                            self.known_nodes[node_id].delta_emitted = (
+                                msg.transfer_statistics.num_emitted - self.known_nodes[node_id].number_emitted
+                            )
+                            self.known_nodes[node_id].delta_received = (
+                                msg.transfer_statistics.num_received - self.known_nodes[node_id].number_received
+                            )
+                            self.known_nodes[node_id].delta_error = (
+                                msg.transfer_statistics.num_errored - self.known_nodes[node_id].number_error
+                            )
+                            self.known_nodes[node_id].number_emitted = msg.transfer_statistics.num_emitted
+                            self.known_nodes[node_id].number_received = msg.transfer_statistics.num_received
+                            self.known_nodes[node_id].number_error = msg.transfer_statistics.num_errored
+                    except PortClosedError:
+                        # Port was closed during shutdown, exit gracefully
+                        break
+                    finally:
+                        client.close()
+                await asyncio.sleep(next_update_at - asyncio.get_running_loop().time())
+                next_update_at += UPDATE_PERIOD
+        except (asyncio.CancelledError, PortClosedError):
+            # Task was cancelled or port closed during shutdown, exit gracefully
+            pass
 
     def close(self) -> None:
         self.running = False
