@@ -202,7 +202,11 @@ TX: {node.number_emitted} dTX:{node.delta_emitted} RX: {node.number_received} dR
         self.can_nodes.remove_children()
         self.serial_nodes.remove_children()
         for cyphal_node in self.cyphal_nodes:
-            for node_id, node in cyphal_node.known_nodes.items():
+            # Create a snapshot of known_nodes to iterate safely
+            with cyphal_node._lock:
+                nodes_snapshot = dict(cyphal_node.known_nodes)
+
+            for node_id, node in nodes_snapshot.items():
                 item = self.heartbeat_to_string(node)
                 subnet = None
                 if cyphal_node.transport_type == "UDP":
@@ -227,14 +231,18 @@ TX: {node.number_emitted} dTX:{node.delta_emitted} RX: {node.number_received} dR
             info_viewer = self.query_one("#info-viewer", Static)
             if self.node_id > 0:
                 for cyphal_node in self.cyphal_nodes:
-                    if self.node_id in cyphal_node.known_nodes.keys():
-                        info_viewer.update(self.node_to_string(cyphal_node.known_nodes[self.node_id]))
-                        break
+                    with cyphal_node._lock:
+                        if self.node_id in cyphal_node.known_nodes.keys():
+                            info_viewer.update(self.node_to_string(cyphal_node.known_nodes[self.node_id]))
+                            break
 
         register_viewer = self.query_one("#register-viewer", DataTable)
         register_viewer.clear()
         for cyphal_node in self.cyphal_nodes:
-            for node_id, node in cyphal_node.known_nodes.items():
+            with cyphal_node._lock:
+                nodes_snapshot = dict(cyphal_node.known_nodes)
+
+            for node_id, node in nodes_snapshot.items():
                 if node_id == self.node_id:
                     for register in node.registry:
                         register_viewer.add_row(
@@ -255,12 +263,22 @@ TX: {node.number_emitted} dTX:{node.delta_emitted} RX: {node.number_received} dR
         log_viewer = self.query_one("#log-viewer", RichLog)
         # do not clear the log! just append new entries
         for cyphal_node in self.cyphal_nodes:
-            while len(cyphal_node.diagnostics) > 0:
-                log = cyphal_node.diagnostics.popleft()
+            # Safely pop diagnostics with lock protection
+            with cyphal_node._lock:
+                diagnostics_snapshot = []
+                while len(cyphal_node.diagnostics) > 0:
+                    diagnostics_snapshot.append(cyphal_node.diagnostics.popleft())
+
+            for log in diagnostics_snapshot:
                 log_viewer.write(f"[{log.node_id}][{log.timestamp}] {log.level}: {log.message}")
 
-            while len(cyphal_node.results) > 0:
-                result: Result = cyphal_node.results.popleft()
+            # Safely pop results with lock protection
+            with cyphal_node._lock:
+                results_snapshot = []
+                while len(cyphal_node.results) > 0:
+                    results_snapshot.append(cyphal_node.results.popleft())
+
+            for result in results_snapshot:
                 if result.status == Status.DID_NOT_SEND:
                     log_viewer.write(f"[{result.server_node_id}] Command Result: DID NOT SEND - {result.output}")
                 else:
@@ -305,7 +323,10 @@ TX: {node.number_emitted} dTX:{node.delta_emitted} RX: {node.number_received} dR
                 return
             for cyphal_node in self.cyphal_nodes:
                 # send the new register value to the node to convert and set it via Cyphal
-                if self.node_id in cyphal_node.known_nodes.keys():
+                with cyphal_node._lock:
+                    node_exists = self.node_id in cyphal_node.known_nodes.keys()
+
+                if node_exists:
                     if self.verbose:
                         log_viewer.write(
                             f"New value for register {self.node_id}:'{register_name}': {register_type} => {value}"
@@ -363,7 +384,10 @@ TX: {node.number_emitted} dTX:{node.delta_emitted} RX: {node.number_received} dR
             log_viewer.write(f"Button '{event.button.id}' pressed. Node Id: {self.node_id}")
         # Send command to the selected node to the node which knows it
         for cyphal_node in self.cyphal_nodes:
-            if self.node_id in cyphal_node.known_nodes.keys():
+            with cyphal_node._lock:
+                node_exists = self.node_id in cyphal_node.known_nodes.keys()
+
+            if node_exists:
                 if self.verbose:
                     log_viewer.write(
                         f"Sending command '{self.command}' with args '{self.command_args}' to Node ID {self.node_id} via {cyphal_node.transport_type}"
@@ -391,8 +415,13 @@ TX: {node.number_emitted} dTX:{node.delta_emitted} RX: {node.number_received} dR
         cmd_node_input = self.query_one("#cmd-node", Input)
         cmd_node_input.value = str(self.node_id)
         for node in self.cyphal_nodes:
-            if self.node_id in node.known_nodes.keys():
-                info_viewer.update(self.node_to_string(node.known_nodes[self.node_id]))
+            with node._lock:
+                if self.node_id in node.known_nodes.keys():
+                    node_info = self.node_to_string(node.known_nodes[self.node_id])
+                else:
+                    node_info = None
+            if node_info:
+                info_viewer.update(node_info)
                 break
 
     @on(TabbedContent.TabActivated, "#data-tabs")
@@ -404,7 +433,10 @@ TX: {node.number_emitted} dTX:{node.delta_emitted} RX: {node.number_received} dR
         if "RegistryView" in event.tab.id:
             # start the register listing of the selected node
             for node in self.cyphal_nodes:
-                if self.node_id in node.known_nodes.keys():
+                with node._lock:
+                    node_exists = self.node_id in node.known_nodes.keys()
+
+                if node_exists:
                     asyncio.create_task(node.request_register_list(self.node_id))
                     break
 

@@ -1,6 +1,7 @@
 import ast
 import time
 import asyncio
+import threading
 import collections
 import traceback
 import pycyphal  # Importing PyCyphal will automatically install the import hook for DSDL compilation.
@@ -87,6 +88,7 @@ class CyphalNode(MonotonicClock):
         pycyphal.transport.serial.SerialTransport,
     ]
     transport_type: str
+    _lock: threading.RLock  # Protects shared data structures from concurrent access
 
     def __init__(
         self,
@@ -97,6 +99,7 @@ class CyphalNode(MonotonicClock):
         file_server_folders: List[str] = ["."],
     ) -> None:
         """Constructor"""
+        self._lock = threading.RLock()  # Initialize lock before any shared data
         self.receive_event = asyncio.Event()
         self.transport_type, self.transport = make_transport(ip, inf, mtu, node_id)
         self.diagnostics = collections.deque(maxlen=100)
@@ -161,9 +164,10 @@ class CyphalNode(MonotonicClock):
         end_of_list = False
         index: int = 0
         await self.info(f"Requesting Register List from Node ID {node_id}")
-        if node_id not in self.known_nodes:
-            return  # unknown node
-        node: Node = self.known_nodes[node_id]
+        with self._lock:
+            if node_id not in self.known_nodes:
+                return  # unknown node
+            node: Node = self.known_nodes[node_id]
         if len(node.registry) == 0:
             while not end_of_list:
                 client = self.node.make_client(RegisterList, server_node_id=node_id)
@@ -290,13 +294,14 @@ class CyphalNode(MonotonicClock):
         respondent: int = server_node_id
         if respondent < 0 or respondent > 127:
             response_message = f"Invalid Node ID: {respondent}"
-            self.results.append(
-                make_result(
-                    status=Status.DID_NOT_SEND,
-                    output=response_message,
-                    server_node_id=respondent,
+            with self._lock:
+                self.results.append(
+                    make_result(
+                        status=Status.DID_NOT_SEND,
+                        output=response_message,
+                        server_node_id=respondent,
+                    )
                 )
-            )
             return False
         try:
             # map the strings to command numbers from Cyphal
@@ -349,16 +354,28 @@ class CyphalNode(MonotonicClock):
         status: Status = Status.DID_NOT_SEND
         response_message: str = ""
         respondent: int = server_node_id
-        node: Node = self.known_nodes[server_node_id]
+        with self._lock:
+            if server_node_id not in self.known_nodes:
+                response_message = f"Node ID {server_node_id} is not known."
+                self.results.append(
+                    make_result(
+                        status=Status.DID_NOT_SEND,
+                        output=response_message,
+                        server_node_id=respondent,
+                    )
+                )
+                return False
+            node: Node = self.known_nodes[server_node_id]
         if node.registry is None:
             response_message = f"Node ID {server_node_id} has no registry loaded."
-            self.results.append(
-                make_result(
-                    status=Status.DID_NOT_SEND,
-                    output=response_message,
-                    server_node_id=respondent,
+            with self._lock:
+                self.results.append(
+                    make_result(
+                        status=Status.DID_NOT_SEND,
+                        output=response_message,
+                        server_node_id=respondent,
+                    )
                 )
-            )
             return False
 
         found = False
@@ -368,13 +385,14 @@ class CyphalNode(MonotonicClock):
                 break
         if not found:
             response_message = f"Register {register_name} not found on Node ID {server_node_id}."
-            self.results.append(
-                make_result(
-                    status=Status.DID_NOT_SEND,
-                    output=response_message,
-                    server_node_id=respondent,
+            with self._lock:
+                self.results.append(
+                    make_result(
+                        status=Status.DID_NOT_SEND,
+                        output=response_message,
+                        server_node_id=respondent,
+                    )
                 )
-            )
             return False
         entry: Register = [reg for reg in node.registry if reg.name == register_name][0]
         client = self.node.make_client(RegisterAccess, server_node_id=server_node_id)
@@ -418,13 +436,14 @@ class CyphalNode(MonotonicClock):
                 response_message = (
                     f"Register {register_name} on Node ID {server_node_id} has unknown type {entry.type}."
                 )
-                self.results.append(
-                    make_result(
-                        status=Status.DID_NOT_SEND,
-                        output=response_message,
-                        server_node_id=respondent,
+                with self._lock:
+                    self.results.append(
+                        make_result(
+                            status=Status.DID_NOT_SEND,
+                            output=response_message,
+                            server_node_id=respondent,
+                        )
                     )
-                )
             request = RegisterAccess.Request(name=uavcan.register.Name_1_0(register_name), value=value)
             response = await client.call(request)
             if response is None:
@@ -453,13 +472,14 @@ class CyphalNode(MonotonicClock):
                 f.write(f"{response_message}\n")
         finally:
             client.close()
-            self.results.append(
-                make_result(
-                    status=status,
-                    output=response_message,
-                    server_node_id=respondent,
+            with self._lock:
+                self.results.append(
+                    make_result(
+                        status=status,
+                        output=response_message,
+                        server_node_id=respondent,
+                    )
                 )
-            )
         return True
 
     async def run(self) -> None:
@@ -471,45 +491,48 @@ class CyphalNode(MonotonicClock):
         def on_heartbeat(msg: Heartbeat, txfr: pycyphal.transport.TransferFrom) -> None:
             if txfr.source_node_id is None:
                 return  # can't do much if it's not known
-            if txfr.source_node_id not in self.known_nodes.keys():
-                self.known_nodes[txfr.source_node_id] = make_cyphal_node(
-                    txfr.source_node_id,
-                    Health(msg.health.value),
-                    Mode(msg.mode.value),
-                    msg.uptime,
-                    msg.vendor_specific_status_code,
-                )
-            else:
-                self.known_nodes[txfr.source_node_id].health = Health(msg.health.value)
-                self.known_nodes[txfr.source_node_id].mode = Mode(msg.mode.value)
-                self.known_nodes[txfr.source_node_id].uptime = msg.uptime
-                self.known_nodes[txfr.source_node_id].vendor_specific_status_code = msg.vendor_specific_status_code
+            with self._lock:
+                if txfr.source_node_id not in self.known_nodes.keys():
+                    self.known_nodes[txfr.source_node_id] = make_cyphal_node(
+                        txfr.source_node_id,
+                        Health(msg.health.value),
+                        Mode(msg.mode.value),
+                        msg.uptime,
+                        msg.vendor_specific_status_code,
+                    )
+                else:
+                    self.known_nodes[txfr.source_node_id].health = Health(msg.health.value)
+                    self.known_nodes[txfr.source_node_id].mode = Mode(msg.mode.value)
+                    self.known_nodes[txfr.source_node_id].uptime = msg.uptime
+                    self.known_nodes[txfr.source_node_id].vendor_specific_status_code = msg.vendor_specific_status_code
 
-                # once we find it, add it to the query list
-                self.query_nodes.append(txfr.source_node_id)
+                    # once we find it, add it to the query list
+                    self.query_nodes.append(txfr.source_node_id)
             self.receive_event.set()
 
         self.subscribers["heartbeat"].receive_in_background(on_heartbeat)
 
         def on_portlist(msg: PortList, txfr: pycyphal.transport.TransferFrom) -> None:
-            if txfr.source_node_id in self.known_nodes.keys():
-                self.known_nodes[txfr.source_node_id].publishers = self.subjectlist_to_list(msg.publishers)
-                self.known_nodes[txfr.source_node_id].subscribers = self.subjectlist_to_list(msg.subscribers)
-                self.known_nodes[txfr.source_node_id].clients = self.mask_to_list(msg.clients.mask)
-                self.known_nodes[txfr.source_node_id].servers = self.mask_to_list(msg.servers.mask)
+            with self._lock:
+                if txfr.source_node_id in self.known_nodes.keys():
+                    self.known_nodes[txfr.source_node_id].publishers = self.subjectlist_to_list(msg.publishers)
+                    self.known_nodes[txfr.source_node_id].subscribers = self.subjectlist_to_list(msg.subscribers)
+                    self.known_nodes[txfr.source_node_id].clients = self.mask_to_list(msg.clients.mask)
+                    self.known_nodes[txfr.source_node_id].servers = self.mask_to_list(msg.servers.mask)
             self.receive_event.set()
 
         self.subscribers["portlist"].receive_in_background(on_portlist)
 
         def on_diagnostic(msg: Record, txfr: pycyphal.transport.TransferFrom) -> None:
-            self.diagnostics.append(
-                make_log(
-                    timestamp_microseconds=msg.timestamp.microsecond,
-                    level=Severity(msg.severity.value),
-                    message=msg.text.tobytes().decode("utf-8", errors="ignore"),
-                    node_id=txfr.source_node_id,
+            with self._lock:
+                self.diagnostics.append(
+                    make_log(
+                        timestamp_microseconds=msg.timestamp.microsecond,
+                        level=Severity(msg.severity.value),
+                        message=msg.text.tobytes().decode("utf-8", errors="ignore"),
+                        node_id=txfr.source_node_id,
+                    )
                 )
-            )
             self.receive_event.set()
 
         self.subscribers["diagnostic"].receive_in_background(on_diagnostic)
@@ -520,14 +543,15 @@ class CyphalNode(MonotonicClock):
         ) -> None:
             # Just update the captured time
             self.time_sync.on_receive_previous_time_microseconds(msg.previous_transmission_timestamp_microsecond)
-            self.diagnostics.append(
-                make_log(
-                    timestamp_microseconds=self.time_sync.get_current_time_microseconds(),
-                    level=Severity.INFO,
-                    message=f"Received previous time microsecond sync from Node ID {txfr.source_node_id}: {msg.previous_transmission_timestamp_microsecond}",
-                    node_id=self.node.id,
+            with self._lock:
+                self.diagnostics.append(
+                    make_log(
+                        timestamp_microseconds=self.time_sync.get_current_time_microseconds(),
+                        level=Severity.INFO,
+                        message=f"Received previous time microsecond sync from Node ID {txfr.source_node_id}: {msg.previous_transmission_timestamp_microsecond}",
+                        node_id=self.node.id,
+                    )
                 )
-            )
             self.receive_event.set()
 
         self.subscribers["time"].receive_in_background(on_time)
@@ -543,9 +567,16 @@ class CyphalNode(MonotonicClock):
             if self.time_sync_enabled:
                 await self.publishers["time"].publish(self.get_time_message())
 
-            for server_node_id in self.query_nodes:
-                if self.known_nodes[server_node_id].name is not None:
-                    continue  # Already have info
+            # Create a snapshot of query_nodes to iterate safely
+            with self._lock:
+                query_snapshot = list(self.query_nodes)
+
+            for server_node_id in query_snapshot:
+                with self._lock:
+                    if server_node_id not in self.known_nodes:
+                        continue
+                    if self.known_nodes[server_node_id].name is not None:
+                        continue  # Already have info
                 client = self.node.make_client(GetInfo, server_node_id=server_node_id)
                 try:
                     response = await client.call(GetInfo.Request())
@@ -563,23 +594,27 @@ class CyphalNode(MonotonicClock):
                         " Response:",
                         response,
                     )
-                    self.known_nodes[server_node_id].name = msg.name.tobytes().decode("utf-8", errors="ignore")
-                    self.known_nodes[server_node_id].software_version = (
-                        msg.software_version.major,
-                        msg.software_version.minor,
-                    )
-                    self.known_nodes[server_node_id].hardware_version = (
-                        msg.hardware_version.major,
-                        msg.hardware_version.minor,
-                    )
-                    self.known_nodes[server_node_id].revision = msg.software_vcs_revision_id
-                    self.known_nodes[server_node_id].crc64we = msg.software_image_crc.flatten()
-                    self.known_nodes[server_node_id].unique_id = msg.unique_id.tobytes()
-                    self.known_nodes[server_node_id].certificate = msg.certificate_of_authenticity.tobytes()
+                    with self._lock:
+                        self.known_nodes[server_node_id].name = msg.name.tobytes().decode("utf-8", errors="ignore")
+                        self.known_nodes[server_node_id].software_version = (
+                            msg.software_version.major,
+                            msg.software_version.minor,
+                        )
+                        self.known_nodes[server_node_id].hardware_version = (
+                            msg.hardware_version.major,
+                            msg.hardware_version.minor,
+                        )
+                        self.known_nodes[server_node_id].revision = msg.software_vcs_revision_id
+                        self.known_nodes[server_node_id].crc64we = msg.software_image_crc.flatten()
+                        self.known_nodes[server_node_id].unique_id = msg.unique_id.tobytes()
+                        self.known_nodes[server_node_id].certificate = msg.certificate_of_authenticity.tobytes()
                 finally:
                     client.close()
             # For each known Node ID, get transport statistics every period
-            for node_id in self.known_nodes.keys():
+            with self._lock:
+                node_ids_snapshot = list(self.known_nodes.keys())
+
+            for node_id in node_ids_snapshot:
                 client = self.node.make_client(TransportStatistics, server_node_id=node_id)
                 try:
                     response = await client.call(TransportStatistics.Request())
@@ -589,18 +624,19 @@ class CyphalNode(MonotonicClock):
                     self.receive_event.set()
                     msg, metadata = response
                     assert isinstance(msg, TransportStatistics.Response)
-                    self.known_nodes[node_id].delta_emitted = (
-                        msg.transfer_statistics.num_emitted - self.known_nodes[node_id].number_emitted
-                    )
-                    self.known_nodes[node_id].delta_received = (
-                        msg.transfer_statistics.num_received - self.known_nodes[node_id].number_received
-                    )
-                    self.known_nodes[node_id].delta_error = (
-                        msg.transfer_statistics.num_errored - self.known_nodes[node_id].number_error
-                    )
-                    self.known_nodes[node_id].number_emitted = msg.transfer_statistics.num_emitted
-                    self.known_nodes[node_id].number_received = msg.transfer_statistics.num_received
-                    self.known_nodes[node_id].number_error = msg.transfer_statistics.num_errored
+                    with self._lock:
+                        self.known_nodes[node_id].delta_emitted = (
+                            msg.transfer_statistics.num_emitted - self.known_nodes[node_id].number_emitted
+                        )
+                        self.known_nodes[node_id].delta_received = (
+                            msg.transfer_statistics.num_received - self.known_nodes[node_id].number_received
+                        )
+                        self.known_nodes[node_id].delta_error = (
+                            msg.transfer_statistics.num_errored - self.known_nodes[node_id].number_error
+                        )
+                        self.known_nodes[node_id].number_emitted = msg.transfer_statistics.num_emitted
+                        self.known_nodes[node_id].number_received = msg.transfer_statistics.num_received
+                        self.known_nodes[node_id].number_error = msg.transfer_statistics.num_errored
                 finally:
                     client.close()
             await asyncio.sleep(next_update_at - asyncio.get_running_loop().time())
