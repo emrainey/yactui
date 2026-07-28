@@ -7,7 +7,7 @@ import logging
 import collections
 import pycyphal  # Importing PyCyphal will automatically install the import hook for DSDL compilation.
 
-import pycyphal.application  # This module requires the root namespace "uavcan" to be transcompiled.
+import pycyphal.application  # This module requires the root namespace "uavcan" to be trans-piled.
 import pycyphal.transport.udp
 import pycyphal.transport.can
 import pycyphal.transport.serial

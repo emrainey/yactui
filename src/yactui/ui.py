@@ -83,7 +83,6 @@ class CyphalTUI(App[int]):
     node_id: int
     selected_node: Optional[int]  # Uses the Node ID of the selected node in the tree
     verbose: bool = False
-    _running: bool
     _freeze: bool
     selected_register_row: Optional[int]
     node_info: Dict[int, Dict[str, Any]]
@@ -98,7 +97,6 @@ class CyphalTUI(App[int]):
         self.selected_node = None
         self.selected_register_row = None
         self.verbose = verbose
-        self._running = True
         self._freeze = False
         self.node_info = {}
 
@@ -172,7 +170,7 @@ class CyphalTUI(App[int]):
         log_viewer.write("Subscribed to uavcan.diagnostic.Record...")
         digits = self.query_one("#timestamp", Digits)
         digits.update("0")
-        asyncio.create_task(self.main())
+        self.set_interval(0.5, self._tick)
 
     def heartbeat_to_string(self, node: Node) -> str:
         return f"{node.node_id}: Health: {node.health}, Mode: {node.mode}, Uptime: {node.uptime} VSSC: {hex(node.vendor_specific_status_code)}"
@@ -442,7 +440,7 @@ TX: {node.number_emitted} dTX:{node.delta_emitted} RX: {node.number_received} dR
 
     def action_quit(self) -> None:
         """Action to quit the application."""
-        self._running = False
+        self.exit(0)
 
     def action_freeze(self) -> None:
         """Action to freeze/unfreeze the display updates."""
@@ -450,23 +448,9 @@ TX: {node.number_emitted} dTX:{node.delta_emitted} RX: {node.number_received} dR
         log_viewer = self.query_one("#log-viewer", RichLog)
         log_viewer.write(f"Display {'frozen' if self._freeze else 'unfrozen'}.")
 
-    async def main(self) -> None:
-        """Main processing loop for the Cyphal TUI application. Each node provides a receive event which is used to trigger display updates."""
-        UPDATE_PERIOD = 0.5  # seconds
-        next_update_at = asyncio.get_running_loop().time()
-        while self._running:
-            if not self._freeze:
-                # display update
-                self.refresh_display()
-            # let some time pass
-            next_update_at += UPDATE_PERIOD
-            await asyncio.gather(
-                *[node.receive_event.wait() for node in self.cyphal_nodes],
-                asyncio.sleep(next_update_at - asyncio.get_running_loop().time()),
-            )
-            for node in self.cyphal_nodes:
-                if node.receive_event.is_set():
-                    node.receive_event.clear()
+    def _tick(self) -> None:
+        if not self._freeze:
+            self.refresh_display()
         for node in self.cyphal_nodes:
-            node.close()
-        self.exit(0)
+            if node.receive_event.is_set():
+                node.receive_event.clear()
